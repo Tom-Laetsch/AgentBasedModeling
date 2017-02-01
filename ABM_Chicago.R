@@ -316,7 +316,7 @@ rm( group, agent_class, agent_types, hgn, atype, n, apmf, v ) #cleanup
 HOSTILES_DF[sort(sample(1:nrow(HOSTILES_DF), size = 15)), ]
 
 require(ggplot2)
-for( i in 1:50 ){
+for( i in 1:15 ){
      HOSTILES_DF <- MoveUpdater( HOSTILES_DF, area_names = AREA_NAMES, grid_layout = GRID_LAYOUT)
      print(ggplot( data = HOSTILES_DF, aes( x = col, y = -row, col=group )  ) + geom_point(alpha = 0.33))
      Sys.sleep( time = 1 )

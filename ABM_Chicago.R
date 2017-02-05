@@ -1,3 +1,6 @@
+require(dplyr)
+require(ggplot2)
+
 ## Create Coordinate List for Rectangular Nbh inputing top-left (row,col) and bottom-right (row,col)
 RectNbhdMaker <- function( tl_br ){ #tl_br = c( tlr, tlc, brr, brc )
         tlr = tl_br[1]
@@ -14,6 +17,7 @@ RectNbhdMaker <- function( tl_br ){ #tl_br = c( tlr, tlc, brr, brc )
 GridMaker <- function( nrows, ncols ){
      return( RectNbhdMaker( c(topl_row = 1, topl_col = 1, botr_row = nrows, botr_col = ncols)) )
 }
+
 
 
 ######### GRID METRICS 
@@ -33,6 +37,38 @@ NbhdNbhdDist <- function( nbhd_coords1, nbhd_coords2 ){
 AreNeighbors <- function( b1, b2, radius ){
      return( BlcBlcDist(b1,b2) <= radius )
 }
+
+# create a list containing areas of the grid which we search for neighbors 
+NearbyListNameMaker <- function( blc ){ 
+     #helper function to give consistent list names in ConstructNearbyList 
+     #and elsewhere when we need to grab elements from the list
+     return( paste0("r",blc[1],"_c",blc[2]) ) 
+}
+ConstructNearbyList <- function( grid_layout, nearby_radius ){
+     nearby_list <- list()
+     for( i in 1:nrow(grid_layout) ){
+          bi <- as.matrix( grid_layout[ i, c('row','col') ] )
+          ci <- NearbyListNameMaker(bi)
+          nearby_list[[ci]] <- list( centroid = bi, nearby = bi )
+     }
+     nombres <- names(nearby_list)
+     n_noms <- length(nombres)
+     for( i in 1:(n_noms-1) ){
+          ci <- nombres[ i ]
+          bi <- nearby_list[[ci]]$centroid
+          for( j in (i+1):n_noms ){
+               cj <- nombres[ j ]
+               bj <- nearby_list[[cj]]$centroid
+               if( AreNeighbors(bi,bj,nearby_radius) ){
+                    nearby_list[[ci]]$nearby <- rbind(nearby_list[[ci]]$nearby, bj)
+                    cj <- NearbyListNameMaker( bj )
+                    nearby_list[[cj]]$nearby <- rbind(nearby_list[[cj]]$nearby, bi)
+               }
+          }
+     }
+     return(nearby_list)
+}
+
 
 ########### INITIALIZATION STUFF
 SymMatrixMaker <- function( names, init_val ){
@@ -97,11 +133,13 @@ rviolence <- function( n = 1,
 
 ###### GROUP NEIGHBOR INTERACTION STUFF
 AngerCalculator <- function( n_hostilities, prev_anger, min_anger ){
-     forget_fac <- 0.9
-     prev_fac <- prev_anger * forget_fac
      
-     hostility_fac <- 0.0
-     if( n_hostilities == 1 ){
+     if( n_hostilities == 0 ){
+          forget_fac <- 0.9
+          prev_fac <- prev_anger * forget_fac
+          return( max( prev_fac, min_anger ) )
+     }
+     else if( n_hostilities == 1 ){
           hostility_fac <- 0.5
      }
      else if( n_hostilities == 2){
@@ -111,17 +149,17 @@ AngerCalculator <- function( n_hostilities, prev_anger, min_anger ){
           hostility_fac <- 1.0
      }
      
-     return( max( hostility_fac + (1 - hostility_fac) * prev_fac, min_anger ) )
+     return( hostility_fac + (1 - hostility_fac) * prev_anger )
      
 }
 
-AngerMatrixUpdater <- function( hostility_matrix, anger_matrix ){
+AngerMatrixUpdater <- function( anger_matrix, hostility_matrix, min_anger ){
         n <- nrow(hostility_matrix)
         for( i in 1:n ){
                 for( j in 1:n ){
                      if( i!=j ){
                           # note j,i vs i,j below: that way host&tens matrices are aligned the same: row=to, col=from
-                          anger_matrix[i,j] <- AngerCalculator( hostility_matrix[j,i], anger_matrix[i,j] )
+                          anger_matrix[i,j] <- AngerCalculator( hostility_matrix[j,i], anger_matrix[i,j], min_anger )
                      }
                 }
         }
@@ -131,68 +169,165 @@ AngerMatrixUpdater <- function( hostility_matrix, anger_matrix ){
 
 TensionCalculator <- function( grp1, grp2, anger_matrix ){
         # given the asymmetric anger_matrix, return the symmetric tension between groups
+     return( anger_matrix[grp1,grp2])
         return( max(anger_matrix[grp1,grp2], anger_matrix[grp2,grp1]) )
 }
 
-ShootDecision <- function( perp_grp, perp_viol, vict_grp, anger_matrix, lam = 0.5 ){
+ShootDecision <- function( perp_grp, perp_viol, vict_grp, anger_matrix, lam ){
      grp_tens <- TensionCalculator( perp_grp, vict_grp, anger_matrix )
      p_shoot <- 1 - exp(- lam * (perp_viol * grp_tens))
      return( sample( c(TRUE,FALSE), size = 1, prob = c(p_shoot,1-p_shoot) ) )
 }
 
-#HostilityMatrixUpdater <- function( agents_df, anger_matrix, nbr_radius ){
-     # initialize new matrix to return
-#     updated_hostility_matrix <- HostilityMatrixInit( hostile_group_names )
-     # a function to agregate over neighbor agents
-#     AgentNeighbors <- function ( agent1, agent2, radius ){
-#          b1 = c(agent1['row'], agent1['col'])
-#          b2 = c(agent2['row'], agent2['col'])
-#          return( AreNeighbors(b1,b2,radius) )
-#     }
-     # no one shoots near an authority
-     #p_vs_h <- agents_df$group == 'police'
-     #police <- agents_df[ p_vs_h, ]
-     #hostiles <- agents_df[ !p_vs_h, ]
-     # this loop will remove all hostile agents from shooting if they are near police
-     #not_near_police <- logical()
-     #for( i in 1:nrow(police) ){
-     #     p <- police[i,]
-     #     for( j in 1:nrow(hostiles) ){
-     #          h <- hostiles[j,]
-     #          not_near_police <- c(not_near_police, !AgentNeighbors(p,h,nbr_radius))
-     #     }
-     #}
-     #hostiles <- hostiles[ not_near_police, ]
-     #at this point, every row left in hostiles is not a neighbor of police
+HostilesNotNearAuthority <- function( authority_df, hostiles_df, nearby_radius ){
+     ret_rows <- rep(TRUE, times = nrow(hostiles_df) )
+     for( officer_n in seq_len(nrow(authority_df)) ){
+          officer_b <- authority_df[officer_n, c('row','col')]
+          for( hostile_n in seq_len(nrow(hostiles_df)) ){
+               hostile_b <- hostiles_df[hostile_n, c('row','col') ]
+               if( BlcBlcDist(officer_b, hostile_b) <= nearby_radius ){
+                    ret_rows[hostile_n] <- FALSE
+               }
+          }
+     }
+     return( hostiles_df[ret_rows, ] )
+}
+
+#_old implies outdated and not used
+HostilityUpdater_old <- function( hostility_record_df,
+                              hostiles_df, 
+                              authority_df,
+                              anger_matrix,
+                              current_timestep,
+                              nearby_radius,
+                              lam ){
      
-#     rem_host_names <- unique( as.character(hostiles$group) )
-#     for( perp_grp in rem_host_names ){
-#          in_grp <- hostiles$group == perp_grp
-#          perps <- hostiles[ in_grp, ]
-#          victs <- hostiles[ !in_grp, ]
-#          for( i in 1:nrow(perps) ){
-#               perp <- perps[i, ]
-               #which opposing groups are a neighbor of this perp
-#               nb <- logical()
-#               for( j in 1:nrow(victs) ){
-#                    vict <- victs[j, ]
-#                    nb <- c(nb, AgentNeighbors(perp,vict,nbr_radius))
-#               }
-#               nbhs <- unique( as.character( victs[ nb, ]$group ) )
-#               if( length(nbhs) != 0) {
-#                    for( vict_grp in nbhs ){
-#                         if( ShootDecision(perp_grp = perp_grp, 
-#                                           perp_viol = perp$violence_fac, 
-#                                           vict_grp = vict_grp, 
-#                                           anger_matrix = anger_matrix) ){
-#                              updated_hostility_matrix[perp$group,vict_grp] = update_hostility_matrix[perp_grp,vict_grp] + 1
-#                         }
-#                    }
-#               }
-#          }
-#     }
-#     return( updated_hostility_matrix )
-#}
+     # step 1: remove consideration of hostile agents near police
+     use_hostiles <- HostilesNotNearAuthority( authority_df, hostiles_df, nearby_radius )
+     # step 2:
+     rem_groups <- unique( as.character(use_hostiles$group) )
+     # step 3:
+     if( length(rem_groups) <= 1 ){ return(hostility_record_df) }
+     for( grp in rem_groups ){
+          perps_l <- use_hostiles$group == grp
+          perps <- use_hostiles[ perps_l, ]
+          victs <- use_hostiles[ !perps_l, ]
+          for( perp_n in seq_len(nrow(perps)) ){
+               perp <- perps[ perp_n, ]
+               for( vict_n in seq_len(nrow(victs)) ){
+                    vict <- victs[vict_n, ]
+                    # check if perp and vict are neighbors
+                    if( BlcBlcDist(b1 = perp[c('row','col')], 
+                                   b2 = vict[c('row','col')]) <= nearby_radius ){
+                         # if so, decide if perp shoots at vict
+                         perp_grp <- as.character(perp$group)
+                         vict_grp <- as.character(vict$group)
+                         if( ShootDecision(perp_grp = perp_grp, 
+                                           perp_viol = perp$violence_fac, 
+                                           vict_grp = vict_grp, 
+                                           anger_matrix = anger_matrix,
+                                           lam = lam) ){
+                              new_row <- data.frame( time = current_timestep, 
+                                                     perp_grp = perp_grp,
+                                                     vict_grp = vict_grp,
+                                                     row = perp$row,
+                                                     col = perp$col )
+                              hostility_record_df <- rbind( hostility_record_df, new_row )
+                         }
+                    }
+               }
+          }
+     }
+     
+     return( hostility_record_df )
+}
+
+
+HostilityUpdater <- function( current_timestep,
+                              hostility_record_df, 
+                              hostiles_df, 
+                              authority_df, 
+                              nearby_list,
+                              anger_matrix,
+                              lam ){
+     agents_nearby <- function( agents_rc_mat, nearby_mat ){
+          return( apply(agents_rc_mat, MARGIN = 1, 
+                        FUN = function(row1){ 
+                                             any( apply(nearby_mat, 1, function(row2){ all(row1 == row2) }) ) 
+                                            }
+                       ) 
+                )
+     }
+     
+     hostiles_mat <- as.matrix( hostiles_df[c('row','col')] )
+     
+     to_ignore_cent_names <- apply( as.matrix( unique( authority_df[ c('row','col')] ) ), 
+                                    MARGIN = 1,
+                                    FUN = NearbyListNameMaker )
+     to_ignore <- NULL
+     for( cent in to_ignore_cent_names ){
+          to_ignore <- rbind( to_ignore, nearby_list[[cent]]$nearby )
+     }
+     
+     if(!is.null(to_ignore)){
+          to_ignore_names <- apply( unique( to_ignore ), 
+                                    MARGIN = 1,
+                                    FUN = NearbyListNameMaker )
+          
+     }else{ to_ignore_names <- NULL }
+     to_use_cent_names <- apply( unique( hostiles_mat ) , 
+                                 MARGIN = 1,
+                                 FUN = NearbyListNameMaker )
+     to_use_cent_names <- setdiff( to_use_cent_names, to_ignore_names )
+     for( cent in to_use_cent_names ){
+          nls <- nearby_list[[cent]]
+          cent_who <- apply( hostiles_mat, MARGIN = 1, FUN = function( row ){ all( row == nls$centroid ) } )
+          near_who <- agents_nearby( hostiles_mat, nls$nearby )
+          cent_hosts <- hostiles_df[ cent_who, ]
+          near_hosts <- hostiles_df[ near_who, ]
+          cent_grps <- unique( cent_hosts$group )
+          near_grps <- unique( near_hosts$group )
+          if( length(near_grps) <= 1 ) next
+          for( perp_grp in cent_grps ){
+               perps <- cent_hosts[ cent_hosts$group == perp_grp, ]
+               victs <- near_hosts[ near_hosts$group != perp_grp, ]
+               for( perp_n in seq_len(nrow(perps)) ){
+                    perp <- perps[perp_n, ]
+                    for( vict_n in seq_len(nrow(victs)) ){
+                         vict <- victs[vict_n, ]
+                         if( ShootDecision(perp_grp = perp$group, 
+                                           perp_viol = perp$violence_fac, 
+                                           vict_grp = vict$group, 
+                                           anger_matrix = anger_matrix,
+                                           lam = lam) ){
+                              new_row <- data.frame( time = current_timestep, 
+                                                     perp_grp = perp$group,
+                                                     vict_grp = vict$group,
+                                                     row = perp$row,
+                                                     col = perp$col )
+                              hostility_record_df <- rbind( hostility_record_df, new_row )
+                         }
+                    }
+               }
+          }
+     }
+     return( hostility_record_df )
+}
+
+HostilityMatrixMaker <- function( group_names, hostility_record_df, timestep ){
+     hostility_matrix <- SymMatrixMaker(names = group_names, init_val = 0)
+     hostilities <- hostility_record_df[ hostility_record_df$time == timestep, ] %>%
+                    group_by( perp_grp, vict_grp ) %>%
+                    summarise( n = n() )
+     for( rown in seq_len(nrow(hostilities)) ){
+          pgrp <- as.character(hostilities[rown, ]$perp_grp)
+          vgrp <- as.character(hostilities[rown, ]$vict_grp)
+          n <- as.numeric(hostilities[rown, ]$n)
+          hostility_matrix[ pgrp, vgrp ] <- n
+     }
+     return(hostility_matrix)
+}
+
 
 ############### MOVEMENT FUNCTIONS
 
@@ -304,9 +439,9 @@ HOSTILES_DF <- data.frame( group = group, agent_class = agent_class)
 apmf <- AreaPMFInit( group_names = HOSTILES_NAMES, 
                      area_names = AREA_NAMES,
                      grid_layout = GRID_LAYOUT,
-                     within_grp_p = 0.8,
-                     opposing_grp_p = 0.05,
-                     ether_p = 0.15 )
+                     within_grp_p = 0.90,
+                     opposing_grp_p = 0.01,
+                     ether_p = 0.09 )
 HOSTILES_DF <- merge( HOSTILES_DF, as.data.frame( apmf ), by.x = "group", by.y = 0 )
 v <- rviolence( n = nrow(HOSTILES_DF) )
 HOSTILES_DF$violence_fac <- v
@@ -315,10 +450,59 @@ rm( group, agent_class, agent_types, hgn, atype, n, apmf, v ) #cleanup
 #Look at 15 random agents from HOSTILES_DF
 HOSTILES_DF[sort(sample(1:nrow(HOSTILES_DF), size = 15)), ]
 
-require(ggplot2)
-for( i in 1:15 ){
+AUTHORITY_DF <- data.frame()
+
+ANGER_MATRIX <- AngerMatrixInit(names = HOSTILES_NAMES, min_anger = MIN_ANGER)
+
+
+
+NEARBY_LIST <- ConstructNearbyList( GRID_LAYOUT, NEARBY_RADIUS )
+
+
+
+
+
+HOSTILITY_RECORD_DF <- data.frame( time = numeric(), 
+                                   perp_grp = character(), 
+                                   vict_grp = character(), 
+                                   row = numeric(),
+                                   col = numeric() )
+
+tot_steps <- 100
+
+for( timestep in seq_len( tot_steps ) ){
      HOSTILES_DF <- MoveUpdater( HOSTILES_DF, area_names = AREA_NAMES, grid_layout = GRID_LAYOUT)
-     print(ggplot( data = HOSTILES_DF, aes( x = col, y = -row, col=group )  ) + geom_point(alpha = 0.33))
-     Sys.sleep( time = 1 )
+     print( ggplot( data = HOSTILES_DF[sample(rownames(HOSTILES_DF), size = nrow(HOSTILES_DF)), ], 
+                    aes( x = col, y = -row, col=group ),   ) +
+                 geom_point(alpha = 0.33) +
+                 coord_cartesian( xlim = c(0,13), ylim=c(-13,0)) 
+     )
+     HOSTILITY_RECORD_DF <- HostilityUpdater(  current_timestep = timestep,
+                                               hostility_record_df = HOSTILITY_RECORD_DF,
+                                               hostiles_df = HOSTILES_DF, 
+                                               authority_df = matrix(),
+                                               nearby_list = NEARBY_LIST,
+                                               anger_matrix = ANGER_MATRIX,
+                                               lam=0.002)
+     HOSTILITY_MATRIX <- HostilityMatrixMaker(group_names = HOSTILES_NAMES, 
+                                              hostility_record_df = HOSTILITY_RECORD_DF, 
+                                              timestep = timestep)
+     
+
+     ANGER_MATRIX <- AngerMatrixUpdater(hostility_matrix = HOSTILITY_MATRIX, 
+                                        anger_matrix = ANGER_MATRIX, 
+                                        min_anger = MIN_ANGER )
+     print( sprintf("Time step: %d",timestep) )
+     print("Hostility Matrix:")
+     print(HOSTILITY_MATRIX)
+     print("Anger Matrix:")
+     print(ANGER_MATRIX)
+     print("--------------------------------")
+     
 }
 
+shots <- HOSTILITY_RECORD_DF %>% group_by( time ) %>% summarise( n = n() )
+tdf <- data.frame(time = 1:tot_steps, n = 0)
+tdf[shots$time,'n'] <- shots$n
+shots <- tdf
+ggplot( shots, aes(x = time, y = n) ) + geom_line()

@@ -1,8 +1,59 @@
 require(dplyr)
 require(ggplot2)
 
-## Create Coordinate List for Rectangular Nbh inputing top-left (row,col) and bottom-right (row,col)
-RectNbhdMaker <- function( tl_br ){ #tl_br = c( tlr, tlc, brr, brc )
+"
+We construct an Agent Based Model (ABM), partitioning the agents into N+1
+groups: N hostile groups; 1 police group. At each timestep (tick), each 
+agent will move according to a probability distribution on the ABM lattice
+constructed below. When agents from different hostile groups are within a 
+certain radius of each other, they will decide whether or not to act hostile
+towards each other, which roughly can be described as: if as police agent is 
+near, no hostility will take place; however, if no police agent is near then 
+the opposing agents will sample from a Bernoulli distribution (with distribution
+dependent on previous hostilities between these groups) and decide whether to
+enact a hostility on the opposing group based on the sampling. 
+"
+
+################################################################################
+############################ GRID LATTICE CONSTRUCTION #########################
+"
+In this section we house a few useful functions for creating the grid lattice on 
+which the agents list, and defining metrics on this lattice, which is where are
+used in determination of neighbors to a given agent and potentially affecting the
+movement distribution of each agent. 
+
+Some conventions and notes:
+- Each node on the lattice will be referred to as a 'block'
+- The lattice is conceptualized as a two-column matrix where adjacent blocks (nodes)
+     are then realized as adjacent entries within this matrix. For example, 
+     with a very simple square grid having only four blocks, the grid would be 
+     conceptualized as a square 2x2 matrix.
+- Each hostile group is given a neighborhood on the lattice, which is stored as 
+     a collection of row/col numbers referring to the row/column that neighborhood
+     inhabits of the grid matrix. 
+- Based on a tunable radius (see NEARBY_RADIUS), two agents on the grid will 
+     be considered interacting neighbors if the distance (see BlcBlcDist) between
+     them is below this radius. Brute force calculations of nearest neighbors is 
+     computationally expensive, so to speed this up, when the grid is created and
+     a nearby radius determined, we create the list NEARBY_LIST, with each block 
+     corresponding to a list entry which containing the adjacent blocks within the 
+     radius. While this uses more memory, it dramatically speeds up the calcuations 
+     (e.g., the brute force HostilityUpdater_old is ~60x slower than this newer 
+     technique used in HostilityUpdater). 
+"
+
+RectNbhdMaker <- function( tl_br ){
+"
+RectNbhdMaker: Creates a matrix of coordinates of a rectangular region specified by inputs. 
+
+- input: tl_br = a numeric 4-vector where the first entry is the top-left row number,
+     the second is the top-left col number, the third is the bottom-right row number, 
+     and the fourth is the bottom-right column number. tl_br = c( tlr, tlc, brr, brc )
+
+- output: A two-column matrix with the first column being the row-numbers and the second
+     being the corresponding column numbers for the lattice region contained within the 
+     passed top-left & bottom-right numbers.
+"
         tlr = tl_br[1]
         tlc = tl_br[2]
         brr = tl_br[3]
@@ -15,6 +66,16 @@ RectNbhdMaker <- function( tl_br ){ #tl_br = c( tlr, tlc, brr, brc )
 }
 
 GridMaker <- function( nrows, ncols ){
+"
+GridMaker: Creates a rectangular lattice matrix starting at row=1, col=1 with dimensions specified by inputs.
+
+- input: two integer values nrows, ncols which specify the number of rows and columns, resp., to use
+     when making the lattice.
+
+- output: A two-column matrix with the first column being the row-numbers and the second being the 
+     corresponding column-numbers for the lattice grid starting at top-left: (row,col)=(1,1) and 
+     convering the lattice points with bottom-right: (row,col)=(nrow,ncol). 
+"
      return( RectNbhdMaker( c(topl_row = 1, topl_col = 1, botr_row = nrows, botr_col = ncols)) )
 }
 
@@ -468,7 +529,7 @@ HOSTILITY_RECORD_DF <- data.frame( time = numeric(),
                                    row = numeric(),
                                    col = numeric() )
 
-tot_steps <- 100
+tot_steps <- 150
 
 for( timestep in seq_len( tot_steps ) ){
      HOSTILES_DF <- MoveUpdater( HOSTILES_DF, area_names = AREA_NAMES, grid_layout = GRID_LAYOUT)

@@ -193,10 +193,9 @@ rviolence <- function( n = 1,
 }
 
 ###### GROUP NEIGHBOR INTERACTION STUFF
-AngerCalculator <- function( n_hostilities, prev_anger, min_anger ){
+AngerCalculator <- function( n_hostilities, prev_anger, forget_fac, min_anger ){
      
      if( n_hostilities == 0 ){
-          forget_fac <- 0.9
           prev_fac <- prev_anger * forget_fac
           return( max( prev_fac, min_anger ) )
      }
@@ -214,13 +213,14 @@ AngerCalculator <- function( n_hostilities, prev_anger, min_anger ){
      
 }
 
-AngerMatrixUpdater <- function( anger_matrix, hostility_matrix, min_anger ){
+AngerMatrixUpdater <- function( anger_matrix, hostility_matrix, forget_fac, min_anger ){
         n <- nrow(hostility_matrix)
         for( i in 1:n ){
                 for( j in 1:n ){
                      if( i!=j ){
                           # note j,i vs i,j below: that way host&tens matrices are aligned the same: row=to, col=from
-                          anger_matrix[i,j] <- AngerCalculator( hostility_matrix[j,i], anger_matrix[i,j], min_anger )
+                          anger_matrix[i,j] <- AngerCalculator( hostility_matrix[j,i], anger_matrix[i,j], 
+                                                                forget_fac, min_anger )
                      }
                 }
         }
@@ -392,20 +392,80 @@ HostilityMatrixMaker <- function( group_names, hostility_record_df, timestep ){
 
 ############### MOVEMENT FUNCTIONS
 
-SingleAgentMoveUpdater <- function( agent, area_names, grid_layout ){
+PMFWeightsCalculator1 <- function( grp, 
+                            group_names,
+                            anger_matrix,
+                            anger_fac, 
+                            fear_fac ){
+     reweights <- numeric()
+     reweights['ether'] <- 1
+     reweights[grp] <- 1
+     for( area in group_names ){
+          anger <- anger_matrix[grp,area]
+          fear <- anger_matrix[area,grp]
+          reweights[area] <- exp(anger_fac * anger)
+          reweights[grp] <- reweights[grp] * exp(fear_fac * fear)
+     }
+     return( reweights )
+}
+PMFWeightsCalculator2 <- function( grp, 
+                            group_names,
+                            anger_matrix,
+                            anger_fac, 
+                            fear_fac ){
+     reweights <- numeric()
+     reweights['ether'] <- 1
+     for( area in group_names ){
+          anger <- anger_matrix[grp,area]
+          fear <- anger_matrix[area,grp]
+          reweights[area] <- exp(anger_fac * anger - fear_fac * fear)
+     }
+     return( reweights )
+}
+PMFUpdater <- function( group_names, 
+                        default_area_pmf_matrix,
+                        PMFWeightsCalculator,
+                        ...){
+     area_names <- c(group_names, 'ether')
+     apmf <- default_area_pmf_matrix
+     for( grp in group_names ){
+          reweights <- PMFWeightsCalculator( grp, group_names, ...)
+          apmf[grp, area_names] <- apmf[grp,area_names]*reweights[area_names]
+          apmf[grp,] <- apmf[grp,] / sum( apmf[grp, ] )
+          print(apmf[grp,])
+     }
+     
+     return( apmf )
+}
+
+
+SingleAgentMoveUpdater1 <- function( agent, area_names, grid_layout ){
      # step 1: choose which area to move to based on pmf
      area <- sample( area_names, size = 1, prob = agent[ area_names ])
      # step 2: choose where inside that area to move
-     # currently set to uniform, but can change
      idxs <- as.numeric(rownames(grid_layout[grid_layout$area == area, ]))
-     idx <- sample( idxs, size = 1 )
+     # within their own group or in the ether, move uniformly
+     if( area == agent$group | area == "ether" ){
+          idx <- sample( idxs, size = 1 )
+     } #otherwise, they are moving into hostile territory
+     else{
+          mat <- grid_layout[ grid_layout$area == area, c('row','col') ]
+          dists <- apply( mat, MARGIN = 1, FUN = function( r ){ BlcBlcDist(b1 = agent[c('row','col')], b2 = r)} )
+          prob <- 1 / (dists + 0.5)
+          prob <- prob / sum(prob)
+          idx <- sample(idxs, size = 1, prob = prob)
+     }
+     
      # step 3: return the location
      return( c( row = grid_layout[idx,'row'], col = grid_layout[idx, 'col'] ) )
 }
 
-MoveUpdater <- function( agent_df, area_names, grid_layout ){
+MoveUpdater <- function( area_names,
+                         agent_df,
+                         SingleAgentMoveUpdater,
+                         ...){
      for( i in 1:nrow(agent_df) ){
-          move <- SingleAgentMoveUpdater( agent_df[i, ], area_names, grid_layout )
+          move <- SingleAgentMoveUpdater( agent_df[i, ], area_names, ... )
           agent_df[i, 'row'] <- move['row']
           agent_df[i, 'col'] <- move['col']
      }
@@ -424,7 +484,7 @@ HOSTILES <- list(
      hgrp1 = list( nbhd = RectNbhdMaker(c(topl_row = 2, topl_col = 2, botr_row = 5, botr_col = 5)),
                    agents = list(
                         standard = list(
-                             n = 100,
+                             n = 150,
                              area_pmf = numeric()
                              ),
                         attack = list(
@@ -436,7 +496,7 @@ HOSTILES <- list(
      hgrp2 = list( nbhd = RectNbhdMaker(c(topl_row = 4, topl_col = 6, botr_row = 6, botr_col = 8)),
                    agents = list(
                         standard = list(
-                             n = 100,
+                             n = 70,
                              area_pmf = numeric()
                              ),
                         attack = list(
@@ -500,13 +560,16 @@ HOSTILES_DF <- data.frame( group = group, agent_class = agent_class)
 apmf <- AreaPMFInit( group_names = HOSTILES_NAMES, 
                      area_names = AREA_NAMES,
                      grid_layout = GRID_LAYOUT,
-                     within_grp_p = 0.90,
-                     opposing_grp_p = 0.01,
+                     within_grp_p = 0.905,
+                     opposing_grp_p = 0.005,
                      ether_p = 0.09 )
 HOSTILES_DF <- merge( HOSTILES_DF, as.data.frame( apmf ), by.x = "group", by.y = 0 )
+DEFAULT_AREA_PMF_MATRIX <- apmf
 v <- rviolence( n = nrow(HOSTILES_DF) )
 HOSTILES_DF$violence_fac <- v
 rm( group, agent_class, agent_types, hgn, atype, n, apmf, v ) #cleanup
+HOSTILES_DF$row <- 1
+HOSTILES_DF$col <- 1
 
 #Look at 15 random agents from HOSTILES_DF
 HOSTILES_DF[sort(sample(1:nrow(HOSTILES_DF), size = 15)), ]
@@ -529,22 +592,25 @@ HOSTILITY_RECORD_DF <- data.frame( time = numeric(),
                                    row = numeric(),
                                    col = numeric() )
 
-tot_steps <- 150
+tot_steps <- 500
 
 for( timestep in seq_len( tot_steps ) ){
-     HOSTILES_DF <- MoveUpdater( HOSTILES_DF, area_names = AREA_NAMES, grid_layout = GRID_LAYOUT)
-     print( ggplot( data = HOSTILES_DF[sample(rownames(HOSTILES_DF), size = nrow(HOSTILES_DF)), ], 
-                    aes( x = col, y = -row, col=group ),   ) +
-                 geom_point(alpha = 0.33) +
-                 coord_cartesian( xlim = c(0,13), ylim=c(-13,0)) 
-     )
+     HOSTILES_DF <- MoveUpdater( area_names = AREA_NAMES,
+                                 agent_df = HOSTILES_DF,
+                                 SingleAgentMoveUpdater = SingleAgentMoveUpdater1,
+                                 grid_layout = GRID_LAYOUT )
+     #print( ggplot( data = HOSTILES_DF[sample(rownames(HOSTILES_DF), size = nrow(HOSTILES_DF)), ], 
+     #               aes( x = col, y = -row, col=group ),   ) +
+     #            geom_point(alpha = 0.33) +
+     #            coord_cartesian( xlim = c(0,13), ylim=c(-13,0)) 
+     #)
      HOSTILITY_RECORD_DF <- HostilityUpdater(  current_timestep = timestep,
                                                hostility_record_df = HOSTILITY_RECORD_DF,
                                                hostiles_df = HOSTILES_DF, 
                                                authority_df = matrix(),
                                                nearby_list = NEARBY_LIST,
                                                anger_matrix = ANGER_MATRIX,
-                                               lam=0.002)
+                                               lam=0.003 )
      HOSTILITY_MATRIX <- HostilityMatrixMaker(group_names = HOSTILES_NAMES, 
                                               hostility_record_df = HOSTILITY_RECORD_DF, 
                                               timestep = timestep)
@@ -552,13 +618,33 @@ for( timestep in seq_len( tot_steps ) ){
 
      ANGER_MATRIX <- AngerMatrixUpdater(hostility_matrix = HOSTILITY_MATRIX, 
                                         anger_matrix = ANGER_MATRIX, 
+                                        forget_fac = 0.75,
                                         min_anger = MIN_ANGER )
+     
+     
+     apmf <- PMFUpdater( group_names = HOSTILES_NAMES, 
+                         default_area_pmf_matrix = DEFAULT_AREA_PMF_MATRIX,
+                         PMFWeightsCalculator = PMFWeightsCalculator1,
+                         anger_matrix = ANGER_MATRIX,
+                         anger_fac = 2.0,
+                         fear_fac = 1.0 )
+     HOSTILES_DF <- merge( HOSTILES_DF[!(names(HOSTILES_DF) %in% AREA_NAMES)], as.data.frame( apmf ), 
+                           by.x = "group", by.y = 0 )
+     
      print( sprintf("Time step: %d",timestep) )
      print("Hostility Matrix:")
      print(HOSTILITY_MATRIX)
      print("Anger Matrix:")
      print(ANGER_MATRIX)
      print("--------------------------------")
+     
+     if( timestep %% 5 == 0){
+          shots <- HOSTILITY_RECORD_DF %>% group_by( time ) %>% summarise( n = n() )
+          tdf <- data.frame(time = 1:timestep, n = 0)
+          tdf[shots$time,'n'] <- shots$n
+          shots <- tdf
+          print( ggplot( shots, aes(x = time, y = n) ) + geom_line() )
+     }
      
 }
 
@@ -567,3 +653,10 @@ tdf <- data.frame(time = 1:tot_steps, n = 0)
 tdf[shots$time,'n'] <- shots$n
 shots <- tdf
 ggplot( shots, aes(x = time, y = n) ) + geom_line()
+
+hits <- HOSTILITY_RECORD_DF %>% group_by( perp_grp, vict_grp, row, col ) %>% summarise( n = n() )
+hits$perp_vict <- paste0( hits$perp_grp, "_", hits$vict_grp )
+g <- ggplot( data=hits, aes(x = col, y = -row) )
+g <- g + geom_point( aes(size = n, fill = perp_vict), color = 'black', shape=21, stroke = 1)
+g <- g + coord_cartesian( xlim = c(0,13), ylim=c(-13,0))
+print(g)

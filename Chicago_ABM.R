@@ -19,7 +19,7 @@ PMFer_UniformByLabel <- function( labs ){
      if( n.labs == 0 ) return( NULL )
      pmf <- rep(1, n.labs )
      names(pmf) <- labs 
-     return( pmf/den )
+     return( pmf/sum(pmf) )
 }
 
 ###################################### TENSION AND DOMINANCE

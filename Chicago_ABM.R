@@ -1,8 +1,9 @@
 #################################### GENERIC HELPER FUNCTIONS
-seq_maker <- function( n ){
-     if( class(n) == "numeric" ){ n <- as.integer(n) }
-     if( class(n) != "integer" ) return(NULL)
-     return( seq_len( max(n,0) ) )
+safe_seq_len <- function( n ){
+     tryCatch(
+          { return( seq_len( n ) ) },
+          error = function(e) return( integer(length = 0L) )
+     )
 }
 
 SquareLabelledMatrixMaker <- function( labs ){
@@ -22,16 +23,61 @@ PMFer_UniformByLabel <- function( labs ){
      return( pmf/sum(pmf) )
 }
 
+PMFer_CombineWeightedPMFs <- function( wts, ... ){
+     pmfs <- list( ... )
+     n.pmfs <- length( pmfs )
+     n.wts <- length( wts )
+     if( n.pmfs == 0 ){
+          warning("No PMFs found." )
+          return( NULL )
+     }
+     if( n.wts == 0 ){
+          warning("No weights found." )
+          return( NULL )
+     }
+     if( n.wts != n.pmfs ){
+          warning("Number of weights do not agree with with number of PMFs. Wrapping or truncation will occur.")
+          while( n.pmfs > n.wts ){
+               wts <- c( wts, wts )
+               n.wts <- length( wts )
+          }
+          if( n.wts > n.pmfs ){
+               wts <- wts[1:n.pmfs]
+               n.wts <- n.pmfs
+          }
+     }
+     if( any(wts < 0) ){
+          warning("Some weights given are negative. Setting these to 0.")
+          wts[wts < 0] <- 0
+     }
+     if( (den <- sum(wts)) == 0 ){
+          warning( "Sum of the weights given equals 0. Setting all weights to 1." )
+          wts[1:n.wts] <- 1
+          den <- n.wts
+     }
+     wts_ps <- wts / den
+     wt_pmf <- 0
+     for( i in safe_seq_len(n.wts) ){
+          if( i == 1 ){
+               #used to make sure consistent naming
+               names.pmf <- names(pmfs[[1]])
+          }
+          wt_pmf <- unname(wts[i]) * pmfs[[i]][names.pmf] + wt_pmf
+     }
+     
+     return( wt_pmf )
+}
+
 ###################################### TENSION AND DOMINANCE
 
 UpdateDominanceMatrix <- function( timestep ){
-     #need DOMINANCE_MATRIX, HOSTILITY_HIST, seq_maker
+     #need DOMINANCE_MATRIX, HOSTILITY_HIST, safe_seq_len
      dm <- DOMINANCE_MATRIX
      cur_hist <- HOSTILITY_HIST[HOSTILITY_HIST$time == timestep, ]
      perp_fams <- unique( cur_hist$perp_fam )
      vict_fams <- unique( cur_hist$vict_family )
      fams <- unique( c(perp_fams, vict_fams) )
-     for( i in seq_maker( length(fams) - 1 ) ){
+     for( i in safe_seq_len( length(fams) - 1 ) ){
           for( j in (i+1):length(fams) ){
                fi <- fams[i]
                fj <- fams[j]
@@ -48,13 +94,13 @@ UpdateDominanceMatrix <- function( timestep ){
 }
 
 UpdateTensionMatrix <- function( timestep ){
-     #need TENSION_MATRIX, HOSTILITY_HIST, TENSION_MATRIX_ENTRY, seq_maker
+     #need TENSION_MATRIX, HOSTILITY_HIST, TENSION_MATRIX_ENTRY, safe_seq_len
      tm <- TENSION_MATRIX
      cur_hist <- HOSTILITY_HIST[HOSTILITY_HIST$time == timestep, ]
      perp_nbhds <- unique( cur_hist$perp_nbhd )
      vict_nbhds <- unique( cur_hist$vict_nbhd )
      nbhds <- unique( c(perp_nbhds, vict_nbhds) )
-     for( i in seq_maker( length(nbhds) - 1 ) ){
+     for( i in safe_seq_len( length(nbhds) - 1 ) ){
           for( j in (i+1):length(nbhds) ){
                ni <- nbhds[i]
                nj <- nbhds[j]
@@ -291,7 +337,7 @@ CreatePlayground <- function( combine_adj = F ){
      # end STEP 1
      
      # STEP 2: join the ether
-     playground <- merge( playground, LATTICE[,c('row','col')], by = c('row','col'), all.x = T, all.y = T)
+     playground <- merge( playground, .LATTICE[,c('row','col')], by = c('row','col'), all.x = T, all.y = T)
      playground$designation[ is.na(playground$designation) ] <- "ether"
      playground$nbhd_name[ is.na(playground$nbhd_name) ] <- "ether"
      playground$family[ is.na(playground$family) ] <- "ether"
@@ -326,7 +372,7 @@ CreatePlayground <- function( combine_adj = F ){
      
      ## the following for loop is where the dist calc magic happens
      ether_nodes <- playground[playground$nbhd_name == 'ether', c('row','col')]
-     for( an in seq_maker(n.non_ether_nbhds) ){
+     for( an in safe_seq_len(n.non_ether_nbhds) ){
           if( VERBOSE ) inter.time.start <- Sys.time()
           a <- non_ether_nbhds[an]
           dist_from_a <- paste0('dist_from_',a)
@@ -412,12 +458,12 @@ CreatePlaygroundSummaries <- function( ){
      }
      
      ## .PGSUM
-     nb_grp <- dplyr::group_by(PLAYGROUND, nbhd_name )
+     nb_grp <- dplyr::group_by(PLAYGROUND, designation, family, nbhd_name )
      pgsum <-   dplyr::summarise_at(nb_grp, .cols = dplyr::vars(dplyr::contains("dist_from_")), .funs = min )
      pgsum$hostile <- as.logical(
           ( dplyr::summarise(nb_grp, h = max(hostile)) )$h
      )
-     assign('.PGSUM', pgsum, .GlobalEnv )
+     assign('.PGSUM', as.data.frame( pgsum ), .GlobalEnv )
      
      ## .ETHSUM
      ether <- PLAYGROUND[PLAYGROUND$designation == "ether", ]
@@ -506,7 +552,8 @@ CreateHostNbhdSummary <- function( ){
           return( F )
      }
      grp <- dplyr::group_by( HOSTILES_DF, designation, family, base_nbhd )
-     assign('.HOSTNBHDSUM', dplyr::summarise( grp, n_agents = n() ), .GlobalEnv)
+     df <- as.data.frame( dplyr::summarise( grp, n_agents = n() ) )
+     assign('.HOSTNBHDSUM', df, .GlobalEnv)
      return( T )
 }
 
@@ -565,8 +612,9 @@ CreateAuthoritiesDF <- function( ){
      
 
      auth <- AUTHORITIES
-     auth$n_free <- max( ifelse( is.null(auth$n_free), 0, auth$n_free ), 0 )
-     if( is.null(auth$min_per_nbhd) ) auth$min_per_nbhd <- 2
+     n_free <- auth$n_free
+     auth$n_free <- max( ifelse( is.null(n_free), 0, n_free ), 0 )
+     if( is.null(auth$min_per_nbhd) ) auth$min_per_nbhd <- 0
      if( is.null(auth$assignement_radius) ) auth$assignment_radius <- 5
      
      
@@ -592,19 +640,25 @@ CreateAuthoritiesDF <- function( ){
      n.nbhds.remain <- length( remain_nbhds )
      if( n.nbhds.remain == 0 ){
           auth$n_assigned <- length.assigned
-          auth$n_free <- auth$n_free + n.auth.agents.remain
+          n_free <- auth$n_free + n.auth.agents.remain
      } else {
           n.auth.agents.reserved <- auth$min_per_nbhd*n.nbhds.remain
           n.auth.agents.remain <- max( n.auth.agents.remain,  n.auth.agents.reserved)
           wts <- .HOSTNBHDSUM$n_agents[ .HOSTNBHDSUM$base_nbhd %in% remain_nbhds ]
-          wts <- wts / sum(wts) 
+          if( (den <- sum(wts)) == 0 ){ 
+               n.wts <- length(wts)
+               wts <- rep( 1, times = n.wts )
+               wts <- wts/n.wts
+          } else {
+               wts <- wts / den 
+          }
           agent_partition <- sapply( wts, 
-                                     FUN = function( x ){ 
+                                     FUN = function( x ){
                                           floor( x * (n.auth.agents.remain - n.auth.agents.reserved ) ) + auth$min_per_nbhd } 
                                      )
           names( agent_partition ) <- remain_nbhds
           # add whichever remain as free agents
-          auth$n_free <- auth$n_free +  n.auth.agents.remain - sum( agent_partition )
+          n_free <- auth$n_free +  n.auth.agents.remain - sum( agent_partition )
           for( nbhd_name in remain_nbhds ){
                assigned_nbhds <- c( assigned_nbhds, rep(nbhd_name, times = agent_partition[nbhd_name]) )
                current_node <- c( current_node, 
@@ -612,12 +666,12 @@ CreateAuthoritiesDF <- function( ){
                }
      }
      
-     assigned_nbhds <- c( assigned_nbhds, rep("free_", times = auth$n_free) )
+     assigned_nbhds <- c( assigned_nbhds, rep("free_", times = n_free) )
      rem_nodes <- rownames( PLAYGROUND[!(PLAYGROUND$nbhd_name %in% assigned_nbhds), ] )
-     if( length(rem_nodes) < auth$n_free ){
+     if( length(rem_nodes) < n_free ){
           rem_nodes <- rownames(PLAYGROUND)
      }
-     current_node <- c( current_node, sample( rem_nodes, size = auth$n_free, replace = T) )
+     current_node <- c( current_node, sample( rem_nodes, size = n_free, replace = T) )
      
      df <- data.frame( assigned_nbhd = assigned_nbhds, current_node = current_node, 
                        stringsAsFactors = F )
@@ -625,6 +679,18 @@ CreateAuthoritiesDF <- function( ){
      assign('AUTHORITIES_DF', df, .GlobalEnv)
      assign('AUTHORITIES', auth, .GlobalEnv)
      
+     return( T )
+}
+
+CreateAuthSummary <- function( ){
+     if( !exists('AUTHORITIES_DF') ){
+          cat(paste("ERROR: AUTHORITIES_DF not found.",
+                    "Please run CreateAuthoritiesDF before calling this function.\n\n", sep = " "))
+          return( F )
+     }
+     grp <- dplyr::group_by( AUTHORITIES_DF, assigned_nbhd )
+     df <- as.data.frame( dplyr::summarise( grp, n_agents = n() ) )
+     assign('.AUTHSUM', df, .GlobalEnv)
      return( T )
 }
 
@@ -658,25 +724,43 @@ InteractionUpdater <- function( timestep ){
      
      # retrieve all nodes neighboring an authority agent
      auth_nbrs <- NULL
+     names.auth_nbrs <- NULL
      if( exists('AUTHORITIES_DF') ){
-          if( nrow(AUTHORITIES_DF) > 0 ){
-               auth_nbrs <- sapply( AUTHORITIES_DF$current_node, FUN = NbrIndices )
-               auth_nbrs <- unique( do.call(c,auth_nbrs) )
+          n.auth <- nrow( AUTHORITIES_DF )
+          if( n.auth > 0 ){
+               #auth_nbrs <- sapply( AUTHORITIES_DF$current_node, FUN = NbrIndices )
+               #auth_nbrs <- unique( do.call(c,auth_nbrs) )
+               auth_nbrs <- character()
+               for( i in safe_seq_len(n.auth) ){
+                    auth_ag <- AUTHORITIES_DF[i, ]
+                    nbrs <- NbrIndices( auth_ag$current_node )
+                    for( nbr in nbrs ){
+                         if( nbr %in% names.auth_nbrs ){
+                              auth_nbrs[nbr] <- paste( unique( c(auth_nbrs[nbr], auth_ag$assigned_nbhd) ), sep = "&&" )
+                         } else {
+                              auth_nbrs[nbr] <- auth_ag$assigned_nbhd
+                              names.auth_nbrs <- names( auth_nbrs )
+                         }
+                    }
+               }
+               auth_nbrs <- auth_nbrs[ names.auth_nbrs %in% HOSTILES_DF$current_node ]
           }
      }
      # collect hostile agent info who are near an authority agent
-     auth_witnesses <- HOSTILES_DF[ HOSTILES_DF$current_node %in% auth_nbrs, ]
+     auth_witnesses <- HOSTILES_DF[ HOSTILES_DF$current_node %in% names.auth_nbrs, ]
      witness_id <- auth_witnesses$uid
      witness_node <- auth_witnesses$current_node
      witness_nbhd <- auth_witnesses$base_nbhd
      witness_fam <- auth_witnesses$family
      witness_desig <- auth_witnesses$designation
+     auth_assignment <- unname( auth_nbrs[auth_witnesses$current_node] )
      ## store these in the authority encounter log
      auth_sighting <- data.frame(  witness_id = witness_id, 
                                    witness_node = witness_node,
                                    witness_nbhd = witness_nbhd,
                                    witness_fam = witness_fam,
                                    witness_desig = witness_desig,
+                                   auth_assignment = auth_assignment,
                                    stringsAsFactors = F )
      
      ## initialize the vectors that we want to remember
@@ -708,14 +792,14 @@ InteractionUpdater <- function( timestep ){
      unmoved_agents <- HOSTILES_DF[ !who_moved, ]
      
      n.moved <- nrow( moved_agents )
-     for( mv_n in seq_maker(n.moved) ){
+     for( mv_n in safe_seq_len(n.moved) ){
           agent <- moved_agents[mv_n, ]
           agent_nbrs <- as.character( agent$current_node )
           who_enemies <- moved_agents$current_node %in% agent_nbrs
           who_enemies <- who_enemies & (moved_agents$designation != agent$designation)
           moved_enemies <- moved_agents[ who_enemies, ] 
           n.moved_enemies <- nrow( moved_enemies )
-          for( mv_n2 in seq_maker(n.moved_enemies) ){
+          for( mv_n2 in safe_seq_len(n.moved_enemies) ){
                agent2 <- moved_enemies[mv_n2, ]
                # update the hostility encounter log
                witness_id = c( witness_id, agent$uid)
@@ -747,7 +831,7 @@ InteractionUpdater <- function( timestep ){
           who_enemies <- who_enemies & (unmoved_agents$designation != agent$designation)
           unmoved_enemies <- moved_agents[ who_enemies, ] 
           n.unmoved_enemies <- nrow( unmoved_enemies )
-          for( mv_n2 in seq_maker(n.unmoved_enemies) ){
+          for( mv_n2 in safe_seq_len(n.unmoved_enemies) ){
                agent2 <- unmoved_enemies[mv_n2, ]
                # update the hostility encounter log agent -> agent2
                witness_id = c( witness_id, agent$uid)
@@ -829,10 +913,10 @@ InteractionUpdater <- function( timestep ){
      if( nrow( host_hist ) > 0 ){
           # combine events where perps from the same nbhd, standing at the same node shoot at victs from the same nbhd
           host_hist <- dplyr::filter( .data = dplyr::group_by( .data = host_hist, perp_node, perp_nbhd, vict_nbhd ),
-                                      row_number() == sample(seq_maker(n()), size = 1) )
+                                      row_number() == sample(safe_seq_len(n()), size = 1) )
           # combind events where multiple perps from the same nbhd shoot at the victims in the same node from the same nbhd
           host_hist <- dplyr::filter( .data = dplyr::group_by( .data = host_hist, vict_node, vict_nbhd, perp_nbhd ),
-                                      row_number() == sample(seq_maker(n()), size = 1) )
+                                      row_number() == sample(safe_seq_len(n()), size = 1) )
           host_hist <- as.data.frame( lapply( host_hist, FUN = as.character ), stringsAsFactors = F )
      }
      ifelse( nrow(host_hist) > 0,
@@ -843,7 +927,7 @@ InteractionUpdater <- function( timestep ){
      if( nrow( host_sighting ) > 0) {
           # combine sightings of agents from the same nbhd at the same node witnessing enemies from the same family
           host_sighting <- dplyr::filter( .data = dplyr::group_by( .data = host_sighting, witness_node, witness_nbhd, observed_fam ),
-                                          row_number() == sample(seq_maker(n()), size = 1) )
+                                          row_number() == sample(safe_seq_len(n()), size = 1) )
           host_sighting <- as.data.frame( lapply( host_sighting, FUN = as.character ), stringsAsFactors = F  )
      }
      ifelse( nrow(host_sighting) > 0,
@@ -853,7 +937,7 @@ InteractionUpdater <- function( timestep ){
      if( nrow( auth_sighting ) > 0 ){
           # combine sightings of agents from the same nbhd at the same node witnessing authorities
           auth_sighting <- dplyr::filter( .data = dplyr::group_by( .data = auth_sighting, witness_node, witness_nbhd ),
-                                          row_number() == sample(seq_maker(n()), size = 1) )
+                                          row_number() == sample(safe_seq_len(n()), size = 1) )
           auth_sighting <- as.data.frame( lapply( auth_sighting, FUN = as.character ), stringsAsFactors = F )
      }
      ifelse( nrow(auth_sighting) > 0,
@@ -905,7 +989,7 @@ InteractionUpdater <- function( timestep ){
 #################################### DATA IO ##########################################
 
 SavePlayground <- function( file_path ){
-     saveRDS( list(LATTICE = LATTICE, 
+     saveRDS( list(.LATTICE = .LATTICE, 
                    HOSTILES = HOSTILES, 
                    PLAYGROUND = PLAYGROUND, 
                    .PGSUM = .PGSUM, 
@@ -915,13 +999,13 @@ SavePlayground <- function( file_path ){
 
 OpenPlayground <- function( file_path ){
      pg <- readRDS( file_path )
-     LATTICE <<- pg$LATTICE
+     .LATTICE <<- pg$.LATTICE
      HOSTILES <<- pg$HOSTILES
      PLAYGROUND <<- pg$PLAYGROUND
      .PGSUM <<- pg$.PGSUM
      .ETHSUM <<- pg$.ETHSUM
      cat(paste0("Succesfully loaded file.\n",
-               "LATTICE, HOSTILES, PLAYGROUND, .PGSUM, .ETHSUM are now in your global environment.\n") )
+               ".LATTICE, HOSTILES, PLAYGROUND, .PGSUM, .ETHSUM are now in your global environment.\n") )
 }
 
 
@@ -1015,7 +1099,7 @@ ViewAgents <- function(){
 
 #######################################################################################
 #######################################################################################
-############################### SECTION: TUNABLE FUNCTIONS ############################
+############################### SECTION: TUNABLE HELPERS ##############################
 #######################################################################################
 #######################################################################################
 
@@ -1090,10 +1174,12 @@ ShootDecision <- function( perp_agent,
 }
 
 # for ATTACK
-AttackDecision <- function( hfam, allow_multiple_attacks = F ){
+AttackDecision <- function( hfam, 
+                            will_attack_at = 5,
+                            allow_multiple_attacks = F ){
      # requires DOMINANCE MATRIX
-     # returns a logical vector indexed by family names, T => attack
-     will_attack_at <- 5
+     if( !exists('DOMINANCE_MATRIX') ) return(NULL)
+     if( nrow(DOMINANCE_MATRIX) == 0 ) return(NULL)
      dom_vec <- DOMINANCE_MATRIX[ hfam, ]
      min.dom <- min( dom_vec )
      if( min.dom >= 0 ) return(NULL)
@@ -1110,103 +1196,9 @@ AttackDecision <- function( hfam, allow_multiple_attacks = F ){
      return( to_attack )
 }
 
-############################### SECT: TUNABLE FUNCTIONS ###############################
+
+############################### CONT'D: TUNABLE HELPERS ##############################
 ############################### SUBSECTION: PMFers ####################################
-#######################################################################################
-
-StdHostMovesNbhd <- function( hnbhd,
-                              home_wt, 
-                              ether_wt,
-                              ether_nbhd_wts ){
-     
-     den <- home_wt + ether_wt
-     if( ! ( home_wt < 0 | ether_wt < 0 | den == 0) ){
-          homep <- home_wt / den
-          etherp <- ether_wt / den
-     } else {
-          homep <- 1
-          etherp <- 0
-     }
-     if( !( is.null(ether_nbhd_wts) | any(ether_nbhd_wts < 0) | sum(ether_nbhd_wts) == 0 ) ){
-          ether_nbhd_ps <- ether_nbhd_wts / sum( ether_nbhd_wts )
-     } else {
-          ether_nbhd_ps <- c(ether = 1)
-     }
-     pmf <- c(homep, etherp * ether_nbhd_ps)
-     names( pmf ) <- c( hnbhd, names(ether_nbhd_ps) )
-     
-     where <- sample( names(pmf), size = 1, prob = pmf )
-     
-     return( where )
-     
-}
-
-
-StdHostMovesNode <- function( agent,
-                              nbhd_to,
-                              timestep,
-                              ether_nbhd_names = 'ether' ){
-     
-     base_nbhd <- agent$base_nbhd
-     
-     ## if staying home, stay home
-     if( nbhd_to == base_nbhd ) return( agent$base_node )
-     
-     ## how far into the nbhd
-     dists <- unique( PLAYGROUND[PLAYGROUND$nbhd_name == nbhd_to, paste0('dist_from_', base_nbhd)] )
-     dists_pmf <- DIST_PMFer( dists )
-     # if there was an error, stay home
-     if( is.null( dists_pmf ) ) return( agent$base_node )
-     dist_in <- sample( dists, size = 1, prob = dists_pmf )
-     
-     ## which nodes are accessible at that distance
-     red <- PLAYGROUND[ PLAYGROUND$nbhd_name == nbhd_to, ]
-     red <- red[ red[[paste0('dist_from_',base_nbhd)]] == dist_in, ]
-     nodes <- rownames( red )
-     
-     if( is.null( auth_pmf <- AVOID_AUTH_NODES_PMFer(timestep = timestep,
-                                                      agent = agent,
-                                                      nbhd_to = nbhd_to,
-                                                      dist_in = dist_in,
-                                                      nodes = nodes ) ) ){
-          # if something went wrong, stay home
-          n.nodes <- length(nodes)
-          auth_pmf <- rep( 1, n.nodes ) / n.nodes
-          names( auth_pmf ) <- nodes
-     }
-     
-     if( nbhd_to %in% ether_nbhd_names ){
-          if( is.null( enemy_pmf <- AVOID_HOST_NODES_PMFer(timestep = timestep,
-                                                                   agent = agent,
-                                                                   nbhd_to = nbhd_to,
-                                                                   dist_in = dist_in,
-                                                                   nodes = nodes ) ) ){
-               # if something went wrong, stay home
-               n.nodes <- length(nodes)
-               enemy_pmf <- rep( 1, n.nodes ) / n.nodes
-               names( enemy_pmf ) <- nodes
-          }
-          use_pmf <- auth_pmf * enemy_pmf
-          use_pmf <- use_pmf / sum( use_pmf )
-     } else {
-          use_pmf <- auth_pmf
-     }
-     
-     return( sample( nodes, size = 1, prob = use_pmf ) )
-}
-
-StdHostAgentMover <- function( agent,
-                               timestep,
-                               home_wt = 8,
-                               ether_wt = 1,
-                               ether_nbhd_wts = NULL){
-     moved_agent <- agent
-     hnbd <- moved_agent$base_nbhd
-     moved_agent$current_nbhd <- StdHostMovesNbhd( hnbd, home_wt, ether_wt, ether_nbhd_wts )
-     moved_agent$current_node <- StdHostMovesNode( moved_agent, moved_agent$current_nbhd, timestep )
-     return( moved_agent )
-}
-
 
 # for DIST_PMFer
 PMFer_ByDists <- function( dists,
@@ -1215,7 +1207,7 @@ PMFer_ByDists <- function( dists,
      dists_pmf <- 1 / (dfun(dists) + offset)
      if( (den <- sum(dists_pmf)) == 0 ) return( NULL )
      dists_pmf <- dists_pmf / den
-     names( dists_pmf ) <- as.character( dists )
+     names( dists_pmf ) <- names( dists )
      return( dists_pmf )
 }
 
@@ -1329,13 +1321,13 @@ PMFer_HideFromEnemyNodesByDist <- function( agent,
                                             nbhd_to,
                                             dist_in,
                                             nodes,
-                                            timestep ){
-     
+                                            timestep,
+                                            offset ){
      # currently only requires .ETHSUM
      run_anew <- function(){
           dists <- .ETHSUM[nodes, -which( names(.ETHSUM) %in% paste0('dist_from_', agent$designation) ) ]
           names( dists ) <- nodes
-          dists_pmf <- dists + 10
+          dists_pmf <- dists + offset
           if( (den <- sum(dists_pmf)) == 0 ) return( NULL )
           return( dists_pmf / den )
      }
@@ -1473,6 +1465,93 @@ PMFer_HideFromHostNodesBySightings <- function( agent,
 }
 
 
+# for HOST_NBHD_JUMP_PMFer
+PMFer_StdHostMovesNbhd <- function( agent,
+                                    home_wt, 
+                                    ether_wt,
+                                    friendly_wt,
+                                    enemy_wt,
+                                    ether_nbhd_wts,
+                                    friendly_nbhd_wts,
+                                    enemy_nbhd_wts ){
+     
+     make_wt_vec <- function( ){
+          v <- c(home_wt = home_wt, ether_wt = ether_wt, friendly_wt = friendly_wt, enemy_wt = enemy_wt)
+          if( ! ( any(v < 0 ) | (den <- sum(v) ) == 0 ) ){
+               return( v/den )
+          }else{
+               return( NULL )
+          }
+     }
+     make_dists <- function( desigs ){
+          which_nbhds <- (PLAYGROUND$designation %in% desigs)
+          # exclude the agents own nbhd
+          which_nbhds <- which_nbhds & (PLAYGROUND$nbhd_name != agent$base_nbhd)
+          nbhds <- unique( PLAYGROUND$nbhd_name[which_nbhds] )
+          if( length( nbhds ) == 0 ) return( NULL )
+          
+          dist_froms <- paste0('dist_from_',nbhds)
+          red <- .PGSUM[.PGSUM$nbhd_name == agent$base_nbhd, dist_froms ]
+          dists <- as.numeric( red )
+          names(dists) <- nbhds
+          return( dists)
+     }
+     if( is.null( v <- make_wt_vec() ) ){
+          stay_home <- 1
+          names(stay_home) <- agent$base_nbhd
+          return( stay_home )
+     }
+     home_nbhd_ps <- v['home_wt']
+     names(home_nbhd_ps) <- agent$base_nbhd
+     if( ether_wt > 0 ){
+          if( !( any(ether_nbhd_wts < 0) | (den <- sum(ether_nbhd_wts)) == 0 ) ){
+               ether_nbhd_ps <-  unname( v['ether_wt'] ) * ether_nbhd_wts / den
+          } else {
+               ether_nbhd_ps <- c(ether = unname( v['ether_wt']) )
+          }
+     } else { ether_nbhd_ps <- numeric() }
+     if( friendly_wt > 0 ){
+          if( !( any(friendly_nbhd_wts < 0) | (den <- sum(friendly_nbhd_wts)) == 0 ) ){
+               friendly_nbhd_ps <- unname( v['friendly_wt'] ) * friendly_nbhd_wts / den
+          } else {
+               dists <- make_dists( agent$designation )
+               if( is.null( dists ) ){
+                    friendly_wt <- 0
+                    if( is.null( v <- make_wt_vec() ) ){
+                         stay_home <- 1
+                         names(stay_home) <- agent$base_nbhd
+                         return( stay_home )
+                    }
+               } else {
+                    friendly_nbhd_ps <- unname( v['friendly_wt'] ) *  DIST_PMFer( dists )
+               }
+          }
+     } else { friendly_nbhd_ps <- numeric() }
+     if( enemy_wt > 0 ){
+          if( !( any(enemy_nbhd_wts < 0) | (den <- sum(enemy_nbhd_wts)) == 0 ) ){
+               enemy_nbhd_ps <- unname( v['enemy_wt'] )  * enemy_nbhd_wts / den
+          } else {
+               enemy_desigs <- unique( .HOSTNBHDSUM$designation[.HOSTNBHDSUM$designation != agent$designation] )
+               dists <- make_dists( enemy_desigs )
+               if( is.null( dists ) ){
+                    enemy_wt <- 0
+                    if( is.null( v <- make_wt_vec() ) ){
+                         stay_home <- 1
+                         names(stay_home) <- agent$base_nbhd
+                         return( stay_home )
+                    }
+               } else {
+                    enemy_nbhd_ps <-  unname( v['enemy_wt'] ) * DIST_PMFer( dists )
+               }
+          }
+     } else { enemy_nbhd_ps <- numeric() }
+     
+     pmf <- c( home_nbhd_ps, ether_nbhd_ps, friendly_nbhd_ps, enemy_nbhd_ps  )
+     
+     return( pmf )
+}
+
+
 # for NBHD_ATTACK_PMFer
 PMFer_NbhdToAttack <- function( attacker_fam, 
                                 attackee_fam,
@@ -1486,6 +1565,7 @@ PMFer_NbhdToAttack <- function( attacker_fam,
      CalculateAttackNbhdWts <- function( ){
           # requires HOSTILITY_HIST, PLAYGROUND
           if( ! exists( 'HOSTILITY_HIST' ) ) return(NULL)
+          if( nrow( HOSTILITY_HIST ) == 0 ) return( NULL )
           most_recent <- max( HOSTILITY_HIST$timestep )
           print( most_recent )
           wts <- NULL
@@ -1515,7 +1595,10 @@ PMFer_NbhdToAttack <- function( attacker_fam,
 
 
 # for ASSIGNED_AGENT_PMFer
-PMFer_AssignedAgent <- function( agent, timestep, wt_offset, mem_exp_fac ){
+PMFer_AssignedAgent <- function( agent, 
+                                 timestep, 
+                                 wt_offset, 
+                                 mem_exp_fac ){
      # requires AUTH_NBHD_NODES
      CalculateHotNodeWts <- function( ){
           # requires HOSTILITY_HIST, PLAYGROUND
@@ -1575,9 +1658,65 @@ PMFer_AssignedAgent <- function( agent, timestep, wt_offset, mem_exp_fac ){
      return( pmf )
 }
 
+############################### CONT'D: TUNABLE TUNABLE HELPERS #######################
+############################### SUBSECTION: Movement ##################################
+GoHome <- function( agent ){
+     agent$current_node <- agent$base_node
+     agent$current_nbhd <- agent$base_nbhd
+     agent$current_nbhd_desig <- agent$designation
+     return( agent )
+}
 
+StdHostileAgentMover <- function( agent,
+                                  timestep ){
+
+     if( is.null( nbhd_pmf <- HOST_NBHD_JUMP_PMFer( agent = agent, attacking = F, timestep = timestep ) ) ){
+          warning( paste("Error creating PMF for standard hostile agent move at time:", timestep, sep = " ") )
+          return( GoHome(agent) )
+     }
+     
+     nbhd_to <- sample( names(nbhd_pmf), size = 1, prob = nbhd_pmf )
+     
+     if(is.null(nodes_pmf <- HOST_NODE_JUMP_PMFer(agent = agent, nbhd_to = nbhd_to, attacking = F, timestep = timestep))){
+          warning( paste("Error creating PMF for standard hostile agent move at time:", timestep, sep = " ") )
+          return( GoHome(agent) )
+     }
+     
+     node <- sample( names(nodes_pmf), size = 1, prob = nodes_pmf )
+     
+     NewLoc <- PLAYGROUND[node, ]
+     agent$current_node <- node
+     agent$current_nbhd <- NewLoc$nbhd_name
+     agent$current_nbhd_desig <- NewLoc$designation
+     
+     return( agent )
+     
+}
+
+HostileMovementUpdater <- function( timestep ){
+     for( fam in unique( HOSTILES_DF$family ) ){
+          family <- HOSTILES_DF[HOSTILES_DF$family == fam, ]
+          n.agents <- nrow( family )
+          if( !is.null( attackee_fams <- ATTACK( fam ) ) ){
+               # put attack code here
+               ids <- PICK_ATTACKER_IDS( fam )
+               which_agents <- which( family$uid %in% ids )
+               attackers <- family[which_agents, ]
+               family <- family[-which_agents, ]
+          }
+          for( ag_n in safe_seq_len(n.agents) ){
+               agent <- family[ag_n, ]
+          }
+     }
+}
+
+########################################################################################
+########################################################################################
 #################################### TUNABLE VARIABLES #################################
-LATTICE <- RectLatticeMaker( nrows = 350, ncols = 150 ) 
+########################################################################################
+########################################################################################
+
+.LATTICE <- RectLatticeMaker( nrows = 350, ncols = 150 ) 
 
 HOSTILES <- list(
      folk_1 = list(
@@ -1698,17 +1837,14 @@ HOSTILES <- list(
 )
 
 AUTHORITIES <- list( 
-     n_assigned = 100,
+     n_assigned = 120,
      n_free = 10,
      assignment_radius = 5,
-     min_per_nbhd = 2
+     min_per_nbhd = 3
 )
 
 ### Any other type of nbhd
 OTHER_NBHDS <- list()
-
-### Number of authority agents
-N_AUTHORITIES <- 100
 
 ### Nearby neighbor radius
 NBR_RADIUS <- 1
@@ -1722,9 +1858,8 @@ AGGL_AUTHORITY <- T
 ### Run in VERBOSE mode
 VERBOSE <- T
 
-##########################################
-## GLOBAL VARIABLES FROM TUNABLE FUNCTIONS
-##########################################
+############################### CONT'D: TUNABLE VARIABLES #############################
+############################### SUBSECTION: TUNABLE FUNCTIONS #########################
 
 # METRIC must accept node1 and node2 as entries
 METRIC <- function(node1, node2, ...){ TaxiNodeNodeDist(node1, node2 ) }
@@ -1749,8 +1884,13 @@ DOM_MATRIX_ENTRY <- function( outward, inward, old_dom, ... ){ DomEntryCalculato
 # SHOOT must accept perp_agent and vict_agent as entries; returns T/F
 SHOOT <- function( perp_agent, vict_agent, ... ){ ShootDecision(perp_agent, vict_agent, shoot_factor = 0.1) }
 
-# ATTACK must accept hfam; returns chr of family to attack, or NULL if none
-ATTACK <- function( hfam, ... ){ AttackDecision( hfam, allow_multiple_attacks = F ) }
+# ATTACK must accept attacker_fam; returns chr of family to attack, or NULL if none
+ATTACK <- function( attacker_fam, ... ){ AttackDecision( attacker_fam, 
+                                                           will_attack_at = 5,
+                                                           allow_multiple_attacks = F ) }
+
+# N_ATTACKERS must accept attacker_fam and attackee_fams
+PICK_ATTACKER_IDS <- function( attacker_fam, attackee_fams, ... ){ NULL }
 
 ### PMFers
 # ASSIGNED_AGENT_PMFer must accept agent and timestamp
@@ -1768,17 +1908,42 @@ DIST_PMFer <- function( dists, ... ){ PMFer_ByDists(dists,
                                                     dfun = function(x){ x^2},
                                                     offset = 0.5 ) }
 
+# HOST_NBHD_JUMP_PMFer must accept agent, attacking (T/F whether an attack is taking place) and timestep
+HOST_NBHD_JUMP_PMFer <- function( agent, attacking, timestep, ... ){
+     if( attacking ){
+          home_wt <- .95
+          ether_wt <- .05
+          friendly_wt <- 0 
+          enemy_wt <- 0
+     } else {
+          home_wt <- .85
+          ether_wt <- .15
+          friendly_wt <- 0 
+          enemy_wt <- 0
+     }
+     PMFer_StdHostMovesNbhd( agent,
+                             home_wt, 
+                             ether_wt,
+                             friendly_wt,
+                             enemy_wt,
+                             ether_nbhd_wts = NULL,
+                             friendly_nbhd_wts = NULL,
+                             enemy_nbhd_wts = NULL )
+}
+
+
 # HIDE_FROM_ENEMY_NODES_PMFer
-AVOID_ENEMY_NODES_PMFer <- function( agent, nbhd_to, dist_in, nodes, timestep, ...){ 
+AVOID_ENEMY_NODES_PMFer <- function( agent, nbhd_to, dist_in, nodes, attacking, timestep, ...){ 
      PMFer_HideFromEnemyNodesByDist( agent,
                                      nbhd_to,
                                      dist_in,
                                      nodes,
-                                     timestep )
+                                     timestep,
+                                     offset = 5 )
 }
 
 # AVOID_AUTH_NODES_PMFer
-AVOID_AUTH_NODES_PMFer <- function( agent, nbhd_to, dist_in, nodes, timestep, ...){ 
+AVOID_AUTH_NODES_PMFer <- function( agent, nbhd_to, dist_in, nodes, attacking, timestep, ...){ 
      PMFer_HideFromAuthNodes( agent, 
                               nbhd_to,
                               dist_in,
@@ -1786,6 +1951,52 @@ AVOID_AUTH_NODES_PMFer <- function( agent, nbhd_to, dist_in, nodes, timestep, ..
                               timestep,
                               wt_offset = 1,
                               mem_exp_fac = 2)
+}
+
+# HOST_NODE_PMFer
+HOST_NODE_JUMP_PMFer <- function( agent, nbhd_to, attacking, timestep, ...){
+     ## go home if staying in the same nbhd
+     if( nbhd_to == agent$base_nbhd ){
+          ret <- 1
+          names(ret) <- agent$base_node
+          return( ret ) 
+     }
+     ## distance to travel into nbhd_to (tunable via DIST_PMFer)
+     dists <- unique( PLAYGROUND[PLAYGROUND$nbhd_name == nbhd_to, paste0('dist_from_', agent$base_nbhd)] )
+     dists_pmf <- DIST_PMFer( dists )
+     ## go home if there is an error
+     if( is.null( dists_pmf ) ){
+          ret <- 1
+          names(ret) <- agent$base_node
+          return( ret ) 
+     }
+     dist_in <- sample( dists, size = 1, prob = dists_pmf )
+     
+     pg <- PLAYGROUND[ PLAYGROUND$nbhd_name == nbhd_to, ]
+     pg <- pg[ pg[[paste0('dist_from_',agent$base_nbhd)]] == dist_in, ]
+     nodes <- rownames( pg )
+     ## get weighted pmfs based on authority interaction and enemy locations/interactions
+     avoid_enemy_pmf <- AVOID_ENEMY_NODES_PMFer(agent, nbhd_to, dist_in, nodes, attacking, timestep, ...)
+     if( is.null( avoid_enemy_pmf ) ){
+          avoid_enemy_pmf <- PMFer_UniformByLabel( nodes )
+     }
+     avoid_auth_pmf <- AVOID_AUTH_NODES_PMFer(agent, nbhd_to, dist_in, nodes, attacking, timestep, ...)
+     if( is.null( avoid_auth_pmf ) ){
+          avoid_auth_pmf <- PMFer_UniformByLabel( nodes )
+     }
+     
+     ## create a weighted average of the avoid_auth/enemy_pmfs
+     ## tunable here via weights assigned to each pmf
+     if( !attacking ){
+          # equal weighting to avoid auth and enemy
+          auth_wt <- 1
+          enemy_wt <- 1
+     } else {
+          # more likely to avoid enemy 
+          auth_wt <- 1
+          enemy_wt <- 2
+     }
+     PMFer_CombineWeightedPMFs( wts = c(enemy_wt, auth_wt), avoid_enemy_pmf, avoid_auth_pmf )
 }
 
 ############################################# SETUP
@@ -1833,8 +2044,8 @@ AVOID_AUTH_NODES_PMFer <- function( agent, nbhd_to, dist_in, nodes, timestep, ..
 }
 
 .TunableVariablesDefined <- function(){
-     if( !exists('LATTICE') ){
-          cat(paste("ERROR: LATTICE has not been defined.","There is no default list for LATTICE\n", sep = " "))
+     if( !exists('.LATTICE') ){
+          cat(paste("ERROR: .LATTICE has not been defined.","There is no default list for .LATTICE\n", sep = " "))
           return( F )
      }
      if( !exists('HOSTILES') ){
@@ -1843,7 +2054,7 @@ AVOID_AUTH_NODES_PMFer <- function( agent, nbhd_to, dist_in, nodes, timestep, ..
      }
      if( !exists('AUTHORITIES') ){
           cat("- AUTHORITIES list not found. Setting to default list with 275 agents.\n")
-          l <- list( n_assigned = 250, n_free = 25, assign_nbhd_by_population = T )
+          l <- list( n_assigned = 250, n_free = 10, assign_nbhd_by_population = T )
           assign('AUTHORITIES', l, .GlobalEnv)
      }
      if( !exists('OTHER_NBHDS') ){
@@ -1889,14 +2100,19 @@ Setup <- function(  ){
      if( !CreatePlaygroundSummaries() ){
           cat("Error creating .PGSUM and .ETHSUM via CreatePlaygroundSummaries\nSetup Failed.\n")
           return(F)
-     }
+     } 
      if( !CreateHostilesDF() ){ 
-          cat("Error creating HOSTILES_DF dataframe via CreateHostilesDF.\nSetup Failed.")
+          cat("Error creating HOSTILES_DF dataframe via CreateHostilesDF.\nSetup Failed.\n")
           return(F)
      }
      if( !CreateHostNbhdSummary() ){ 
-          cat("Error creating .HOSTNBDHSUM dataframe via CreateHostNbhdSummary.\nSetup Failed.")
+          cat("Error creating .HOSTNBDHSUM dataframe via CreateHostNbhdSummary.\nSetup Failed.\n")
           return(F)
+     } else {
+          if( VERBOSE ){ 
+               cat("Hostile agent summary:\n")
+               print(.HOSTNBHDSUM )
+               cat('\n')}
      }
      if(!CreateAuthNbhdNodes()){
           cat(paste0("Error creating AUTH_NBHD_NODES, necessasary for authority agents in model.\n",
@@ -1906,6 +2122,14 @@ Setup <- function(  ){
           cat(paste0("Error creating AUTHORITIES_DF, necessasary for authority agents in model.\n",
                      "No authority agents will be added to model.\n") )
           CreateEmptyAuthoritiesDF()
+     } else if(!CreateAuthSummary()){
+          cat("Error creating .HOSTNBDHSUM dataframe via CreateHostNbhdSummary.\n")
+         
+     } else {
+          if( VERBOSE ){ 
+               cat("Autority agent summary:\n")
+               print(.AUTHSUM )
+               cat('\n')}
      }
      return(T)
 }

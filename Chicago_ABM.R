@@ -1046,6 +1046,10 @@ OpenPlayground <- function( file_path ){
      return( agent_plot )
 }
 
+ViewPlayground <- function() {
+     cat('ViewPlayground has been taken down until reworked. However, ViewHostiles, ViewAuthorities, and ViewAgents are up and running.\n')
+}
+
 ViewHostiles <- function( alpha = .75, only_spillover = F ){
      if(!exists('PLAYGROUND') ) stop( 'PLAYGROUND not found.' )
      if( !exists('HOSTILES_DF') ) stop('HOSTILES_DF not found.')

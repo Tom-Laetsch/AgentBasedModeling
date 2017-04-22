@@ -6,6 +6,37 @@ safe_seq_len <- function( n ){
      )
 }
 
+
+dist1 <- function( dist, coef, min_val = 0 ){
+     return( coef * max( dist, min_val ) )
+}
+
+
+dist2 <- function( dist, coef, min_val = 0 ){
+     return( coef * max( dist, min_val )^2 )
+}
+
+
+dist3 <- function( dist, coef, min_val = 0 ){
+     return( coef * max( dist, min_val )^3 )
+}
+
+distGraded <- function( dist, 
+                        close_coef,
+                        close_cutoff, 
+                        mid_cutoff, 
+                        min_val = 1 ){
+     # coef chosen to create smooth cutoff boundaries
+     mid_coef <- close_coef / close_cutoff
+     far_coef <- mid_coef / mid_cutoff
+     if( dist <= close_cutoff ){
+          return( close_coef * dist )
+     } else if( close_cutoff< dist & dist <= mid_cutoff ) {
+          return( mid_coef * dist^2 )
+     }
+     return( far_coef * dist^3 )
+}
+
 SquareLabelledMatrixMaker <- function( labs ){
      n_dim <- length(labs)
      if( n_dim == 0 ) return( NULL )
@@ -67,10 +98,6 @@ PMFer_CombineWeightedPMFs <- function( wts, ... ){
      
      return( wt_pmf )
 }
-
-
-########MOVEMENT FUNCTS
-
 
 ####################################### SECTION ###############################################
 ###############################################################################################
@@ -138,6 +165,130 @@ rviolence <- function( n = 1,
      return( scale * (x + min_violence ) )
 }
 
+
+HostAgentCntsHelper <- function( hostiles, qts = c(1.5, 1.25, 1, .75, .6) ){
+     if( !exists('PLAYGROUND') ){
+          stop( "PLAYGROUND must exist to use HostAgentHelper" )
+     }
+     if( !exists('.NBHDSUM') ){
+          warning('.NBHDSUM not found. Creating .NBHDSUM..')
+          if( !CreateNbhdSummary() ){
+               stop( 'ERROR: Unable to creat NBHDSUM.')
+          }
+     }
+     
+     
+     host_nbhds <- .NBHDSUM[.NBHDSUM$hostile, ]
+     n.qts <- length(qts)
+     if( n.qts < 1){
+          warning( 'No quantile information passed. No changes made.' )
+          return(hostiles)
+     }
+     if( n.qts >= 1 ){
+          qs <- quantile( host_nbhds$n_nodes, probs = seq(0,1,1/n.qts) )
+          n.qs <- length( qs )
+     }
+     
+     get_fac <- function( n_nodes ){
+          if( n_nodes <= qs[1] ) return( qts[1] )
+          if( n_nodes >= qs[n.qs]) return( qts[n.qts] )
+          for( i in 1:(n.qs-1) ){
+               if( n_nodes > qs[i] & n_nodes <= qs[i+1] ){
+                    return( qts[i] )
+               }
+          }
+     }
+     
+     for( idx in safe_seq_len(nrow(host_nbhds)) ){
+          info <- host_nbhds[idx, ]
+          fac <- get_fac( info$n_nodes )
+          hostiles[[info$nbhd_name]]$agents <- c(standard = floor(fac * info$n_nodes))
+     }
+     return( hostiles )
+}
+
+
+############################## EXISTENCE CHECKERS #############################################
+
+PgExistChecker <- function( create_if_missing = T,
+                            check_names = c('row',
+                                            'col',
+                                            'node_type',
+                                            'designation',
+                                            'nbhd_name',
+                                            'family',
+                                            'hostile')
+                            ){
+     pg_exist <- F
+     if( exists('PLAYGROUND') ){
+          if( !is.null(PLAYGROUND) ){
+               if( 'data.frame' %in% class(PLAYGROUND) ){
+                    if( all(check_names %in% names(PLAYGROUND)) ){
+                         if( nrow(PLAYGROUND) > 0 ){
+                              pg_exist <- T
+                         }
+                    }
+               }
+          }
+     } else if( create_if_missing ){
+          # try to create, but don't allow an infinite loop
+          if( CreatePlayground() ) pg_exist <- PgExistChecker( F )
+     }
+     return( pg_exist )
+}
+
+AuthDFExistChecker <- function( create_if_missing = T, 
+                                check_names = c('assigned_nbhd',
+                                                'current_node',
+                                                'uid')
+                                ){
+     auth_exist <- F
+     if( exists('AUTHORITIES_DF') ){
+          if( !is.null(AUTHORITIES_DF) ){
+               if( 'data.frame' %in% class(AUTHORITIES_DF) ){
+                    if( all(check_names %in% names(AUTHORITIES_DF)) ){
+                         if( nrow(AUTHORITIES_DF) > 0 ){
+                              auth_exist <- T
+                         }
+                    }
+               }
+          }
+     } else if( create_if_missing ){
+          # try to create, but don't allow an infinite loop
+          if( CreateAuthoritiesDF() ) auth_exist <- AuthDFExistChecker( F )
+     }
+     return( auth_exist )
+}
+
+HostDFExistChecker <- function( create_if_missing = T,
+                                check_names = c('designation',
+                                                'family',
+                                                'base_nbhd',
+                                                'current_nbhd',
+                                                'current_nbhd_desig',
+                                                'base_node',
+                                                'current_node',
+                                                'agent_class',
+                                                'violence_fac',
+                                                'uid') 
+                                ){
+     host_exist <- F
+     if( exists('HOSTILES_DF') ){
+          if( !is.null(HOSTILES_DF) ){
+               if( 'data.frame' %in% class(HOSTILES_DF) ){
+                    if( all(check_names %in% names(HOSTILES_DF)) ){
+                         if( nrow(HOSTILES_DF) > 0 ){
+                              host_exist <- T
+                         }
+                    }
+               }
+          }
+     } else if( create_if_missing ){
+          # try to create, but don't allow an infinite loop
+          if( CreateAuthoritiesDF() ) host_exist <- HostDFExistChecker( F )
+     }
+     return( host_exist )
+}
 
 ############################### METRIC STUFF ##################################################
 
@@ -405,8 +556,8 @@ CreatePlayground <- function( combine_adj = F ){
 
 
 CreatePlaygroundSummaries <- function( ){
-     if( ! exists('PLAYGROUND') ){
-          cat('ERROR: PLAYGROUND must be created before summaries created. Try running CreatePlayground first.\n')
+     if( !PgExistChecker() ){
+          warning('PLAYGROUND not found or empty. Cannot create .PGSUM.')
           return( F )
      }
      
@@ -441,8 +592,8 @@ CreateHostilesDF <- function( ){
           cat(paste("ERROR: HOSTILES list not found.","There is no default list for HOSTILES.\n\n", sep = " "))
           return( F )
      }
-     if( !exists('PLAYGROUND') ){
-          cat(paste("ERROR: Playground not found.","Has CreatePlayground been run?\n\n", sep = " "))
+     if( !PgExistChecker() ){
+          warning('PLAYGROUND not found or empty. Cannot create HOSTILES_DF')
           return( F )
      }
      
@@ -499,9 +650,8 @@ CreateHostilesDF <- function( ){
 }
 
 CreateHostSummary <- function( ){
-     if( !exists('HOSTILES_DF') ){
-          stop(paste("ERROR: HOSTILES_DF not found.",
-                     "Please run CreateHostilesDF before calling CreateHostSummary\n\n", sep = " "))
+     if( !HostDFExistChecker() ){
+          warning(paste("HOSTILES_DF not found. Cannot create .HOSTSUM."))
           return( F )
      }
      grp <- dplyr::group_by( HOSTILES_DF, designation, family, base_nbhd )
@@ -513,9 +663,8 @@ CreateHostSummary <- function( ){
 }
 
 CreateNbhdSummary <- function( ){
-     if( !exists('PLAYGROUND') ){
-          stop(paste("ERROR: PLAYGROUND not found.",
-                     "Must create PLAYGROUND before calling CreateNbhdSummary\n\n", sep = " "))
+     if( !PgExistChecker() ){
+          warning('PLAYGROUND not found or empty. Cannot create .NBHDSUM.')
           return( F )
      }
      grp <- dplyr::group_by( PLAYGROUND, hostile, designation, family, nbhd_name )
@@ -531,14 +680,14 @@ CreateNbhdSummary <- function( ){
 CreateAuthNbhdNodes <- function( ){
      "
      Creates a list, named by neighborhoods, indicating which nodes are within
-     an authority agents range of motion. This will be all nodes within the nbhd
+     an authority agent's range of motion. This will be all nodes within the nbhd
      itself as well as all those within the ether of a certian radius specified
      within the AUTHORITIES list.
      "
      
      #make sure everything is well defined
-     if( !exists('PLAYGROUND') ){
-          cat(paste("ERROR: Playground not found.","Has CreatePlayground been run?\n\n", sep = " "))
+     if( !PgExistChecker() ){
+          warning('PLAYGROUND not found or empty. Cannot create AUTH_NBHD_NODES.')
           return( F )
      }
      if( !exists('AUTHORITIES') ){ 
@@ -546,7 +695,7 @@ CreateAuthNbhdNodes <- function( ){
           return( T ) 
      }
      auth <- AUTHORITIES
-     if( is.null(auth$assignement_radius) ) auth$assignment_radius <- 5
+     if( is.null(auth$assignment_radius) ) auth$assignment_radius <- 5
      nbhds <- PLAYGROUND[PLAYGROUND$nbhd_name != "ether", ]
      ether <- PLAYGROUND[PLAYGROUND$nbhd_name == "ether", ]
      auth_nbhd_nodes <- list()
@@ -564,14 +713,13 @@ CreateAuthNbhdNodes <- function( ){
 
 
 CreateEmptyAuthoritiesDF <- function(){
-     df <- data.frame( assigned_nbhd = character(), current_node = character() )
-     assign('AUTHORITIES', df, .GlobalEnv)
+     #df <- data.frame( assigned_nbhd = character(), current_node = character() )
+     assign('AUTHORITIES_DF', NULL, .GlobalEnv)
      return( T )
 }
 
 CreateAuthoritiesDF <- function( ){
      # Requires AUTHORITIES, AUTH_NBDH_NODES, PLAYGROUND, .PGSUM, .HOSTSUM
-     
      
      if( !exists('AUTHORITIES') ){
           if( VERBOSE ){
@@ -581,16 +729,23 @@ CreateAuthoritiesDF <- function( ){
           return( T )
      }
      
-     
      auth <- AUTHORITIES
      n_free <- auth$n_free
-     auth$n_free <- max( ifelse( is.null(n_free), 0, n_free ), 0 )
+     n_assigned <- auth$n_assigned
+     
+     if( is.null(n_free) | (n_free < 1) ) n_free <- 0
+     if( is.null(n_assigned) | (n_assigned < 1) ) n_assigned <- 0
+     
+     if( n_free == 0 & n_assigned == 0 ){
+          CreateEmptyAuthoritiesDF()
+          return( T )
+     }
+     
      if( is.null(auth$min_per_nbhd) ) auth$min_per_nbhd <- 0
-     if( is.null(auth$assignement_radius) ) auth$assignment_radius <- 5
+     if( is.null(auth$assignement_radius) ) auth$assignment_radius <- 0
      
-     
-     given_nbhds <- intersect( names(AUTHORITIES), .PGSUM$nbhd_name )
-     remain_nbhds <- .PGSUM$nbhd_name[ !(.PGSUM$nbhd_name %in% given_nbhds) ]
+     given_nbhds <- intersect( names(AUTHORITIES), .NBHDSUM$nbhd_name )
+     remain_nbhds <- .NBHDSUM$nbhd_name[ !(.NBHDSUM$nbhd_name %in% given_nbhds) ]
      
      assigned_nbhds <- character()
      current_node <- character()
@@ -603,7 +758,7 @@ CreateAuthoritiesDF <- function( ){
           }
      }
      length.assigned <- length(assigned_nbhds)
-     auth$n_assigned <- max( ifelse( is.null(auth$n_assigned),0, auth$n_assigned), length.assigned )
+     auth$n_assigned <- max( n_assigned, length.assigned )
      
      n.auth.agents.remain <- auth$n_assigned - length.assigned
      # remaining hostile nbhds 
@@ -657,11 +812,11 @@ CreateAuthoritiesDF <- function( ){
 }
 
 CreateAuthSummary <- function( ){
-     if( !exists('AUTHORITIES_DF') ){
-          cat(paste("ERROR: AUTHORITIES_DF not found.",
-                    "Please run CreateAuthoritiesDF before calling this function.\n\n", sep = " "))
-          return( F )
-     }
+     if( !AuthDFExistChecker() ){
+          warning('AUTHORITIES_DF not found; .AUTHSUM set to NULL.')
+          assign('.AUTHSUM',NULL,.GlobalEnv)
+          return(F)
+     } 
      grp <- dplyr::group_by( AUTHORITIES_DF, assigned_nbhd )
      df <- as.data.frame( dplyr::summarise( grp, n_agents = n() ) )
      assign('.AUTHSUM', df, .GlobalEnv)
@@ -680,8 +835,15 @@ CreateDominanceMatrix <- function( ){
 }
 
 
-CreateTensionMatrix <- function( min_enemy_tens = 0.1 ){
-     if( !exists('HOSTILES_DF') ) stop('Must create HOSTILES_DF before TENSION_MATRIX')
+CreateTensionMatrix <- function( ){
+     if( !HostDFExistChecker() ){
+          warning('Must create HOSTILES_DF before TENSION_MATRIX')
+          return(F)
+     }
+     if( !exists('MIN_TENSION') ){
+          warning('MIN_TENSION value not found. Assigning default 0.2')
+          assign('MIN_TENSION', 0.2, .GlobalEnv)
+     } 
      labs <- unique( HOSTILES_DF$base_nbhd )
      tm <- SquareLabelledMatrixMaker( labs = labs )
      if( is.null(tm) ){
@@ -692,7 +854,7 @@ CreateTensionMatrix <- function( min_enemy_tens = 0.1 ){
      for( nbhd1 in labs ){
           for( nbhd2 in labs ){
                if( NbhdDesignation(nbhd1) != NbhdDesignation(nbhd2) ){
-                    tm[nbhd1,nbhd2] <- min_enemy_tens
+                    tm[nbhd1,nbhd2] <- MIN_TENSION
                }
           }
      }
@@ -715,6 +877,9 @@ UpdateDominanceMatrix <- function( timestep ){
      }
      if(!exists('HOSTILITY_HIST')) return( F )
      dm <- DOMINANCE_MATRIX
+     rnames <- rownames(dm)
+     cnames <- colnames(dm)
+     
      cur_hist <- HOSTILITY_HIST[HOSTILITY_HIST$timestep == timestep,]
      if( nrow(cur_hist) < 1 ) return(T)
      
@@ -731,9 +896,9 @@ UpdateDominanceMatrix <- function( timestep ){
           fj <- cnts[famn, ]$vict_fam
           i_to_j <- cnts[ (cnts$perp_fam == fi) & (cnts$vict_fam == fj),  ]$n
           j_to_i <- cnts[ (cnts$perp_fam == fj) & (cnts$vict_fam == fi),  ]$n
-          dm[fi,fj] <- DOM_MATRIX_ENTRY( outward = i_to_j, 
-                                         inward = j_to_i, 
-                                         old_dom = dm[fi,fj] )
+          dm[fi == rnames, fj == cnames] <- DOM_MATRIX_ENTRY( outward = i_to_j, 
+                                                              inward = j_to_i, 
+                                                              old_dom = dm[fi == rnames, fj == cnames] )
      }
      assign('DOMINANCE_MATRIX', dm, .GlobalEnv)
      
@@ -746,8 +911,11 @@ UpdateTensionMatrix <- function( timestep ){
                stop('Unable to create TENSION_MATRIX. Cannot continue.')
           }
      }
-     if(!exists('HOSTILITY_HIST')) return( F )
      tm <- TENSION_MATRIX
+     rnames <- rownames(tm)
+     cnames <- colnames(tm)
+     
+     if(!exists('HOSTILITY_HIST')) return( F )
      cur_hist <- HOSTILITY_HIST[HOSTILITY_HIST$timestep == timestep,]
      if( nrow(cur_hist) < 1 ) return(T)
      
@@ -810,9 +978,11 @@ UpdateTensionMatrix <- function( timestep ){
           nj <- cnts[nbhdn, ]$vict_base_nbhd
           i_to_j <- cnts[ (cnts$perp_base_nbhd == ni) & (cnts$vict_base_nbhd == nj),  ]$n
           j_to_i <- cnts[ (cnts$perp_base_nbhd == nj) & (cnts$vict_base_nbhd == ni),  ]$n
-          tm[ni, nj] <- TENSION_MATRIX_ENTRY( outward = i_to_j, 
-                                              inward = j_to_i, 
-                                              old_tens = tm[ni,nj] )
+          
+          tm[ni == rnames, nj == cnames] <- TENSION_MATRIX_ENTRY( outward = i_to_j, 
+                                                                  inward = j_to_i, 
+                                                                  old_tens = tm[ni == rnames, nj == cnames] )
+          
      }
      assign('TENSION_MATRIX', tm, .GlobalEnv)
      
@@ -862,13 +1032,13 @@ UpdateAttackHostilities <- function( family,
 
 UpdateInteractions <- function( timestep ){
      
-     if( !exists('HOSTILES_DF') ){
-          warning( "HOSTILES_DF not found. No interactions calcuated." )
+     if( !HostDFExistChecker() ){
+          warning( "HOSTILES_DF not found or empty. No interactions calcuated." )
           return( NULL )
      }
      
      ## initialize the vectors that we want to remember
-     ### for HOST_SIGHTING_HIST
+     ### for ENEMY_SIGHTING_HIST
      witness_id <- character()
      witness_in_node <- character()
      witness_base_nbhd <- character()
@@ -1046,7 +1216,7 @@ UpdateInteractions <- function( timestep ){
              host_sighting$timestep <- integer() )
      
      auth_sighting <- data.frame()
-     if( exists('AUTHORITIES_DF') ){
+     if( AuthDFExistChecker() ){
           if( ALL_AUTH_INTERACTIONS ){
                auth_nbrs <- lapply(AUTHORITIES_DF$current_node, FUN=NbrIndices)
                if( (n.auth <- nrow(AUTHORITIES_DF)) == length(auth_nbrs) ){
@@ -1138,10 +1308,10 @@ UpdateInteractions <- function( timestep ){
           assign( 'HOSTILITY_HIST', host_hist, .GlobalEnv )
      }
      if( nrow(host_sighting) > 0 ){
-          if( exists('HOST_SIGHTING_HIST') ){
-               host_sighting <- rbind( HOST_SIGHTING_HIST, host_sighting, make.row.names = F )
+          if( exists('ENEMY_SIGHTING_HIST') ){
+               host_sighting <- rbind( ENEMY_SIGHTING_HIST, host_sighting, make.row.names = F )
           }
-          assign( 'HOST_SIGHTING_HIST', host_sighting, .GlobalEnv )
+          assign( 'ENEMY_SIGHTING_HIST', host_sighting, .GlobalEnv )
      }
      if( nrow( auth_sighting ) > 0 ){
           if( exists('AUTH_SIGHTING_HIST') ){
@@ -1214,7 +1384,7 @@ OpenPlayground <- function( file_path = NULL ){
 }
 
 .ViewAgentsPre <- function( agent_df ){
-     if(!exists('PLAYGROUND') ) stop( 'PLAYGROUND not found.' )
+     if( !PgExistChecker() ) stop('PLAYGROUND not found or empty. Cannot create plot.')
      max.row <- max(PLAYGROUND$row)
      agent_plot <- agent_df
      agent_plot$row <- (max.row + 1 - PLAYGROUND[agent_plot$current_node, ]$row)
@@ -1227,8 +1397,14 @@ ViewPlayground <- function() {
 }
 
 ViewHostiles <- function( alpha = .75, only_spillover = F ){
-     if(!exists('PLAYGROUND') ) stop( 'PLAYGROUND not found.' )
-     if( !exists('HOSTILES_DF') ) stop('HOSTILES_DF not found.')
+     if( !PgExistChecker() ){ 
+          warning('PLAYGROUND not found. Cannot plot agents.')
+          return( ggplot2::ggplot() )
+     }
+     if( !HostDFExistChecker() ){ 
+          warning('HOSTILES_DF not found. Cannot plot agents.')
+          return( ggplot2::ggplot() )
+     }
      hdf <- HOSTILES_DF
      if( only_spillover ){
           hdf <- subset( hdf, current_nbhd != base_nbhd )
@@ -1245,8 +1421,11 @@ ViewHostiles <- function( alpha = .75, only_spillover = F ){
 }
 
 ViewAuthorities <- function( alpha = 1 ){
-     if(!exists('PLAYGROUND') ) stop( 'PLAYGROUND not found.' )
-     if( !exists('AUTHORITIES_DF') ) stop('AUTHORITIES_DF not found.')
+     if( !PgExistChecker() ) stop( 'PLAYGROUND not found. Cannot create plot.' )
+     if( !AuthDFExistChecker() ){ 
+          warning('AUTHORITIES_DF not found. Cannot plot agents.')
+          return( ggplot2::ggplot() )
+     }
      adf <- AUTHORITIES_DF
      aplot <- .ViewAgentsPre( adf )
      
@@ -1260,13 +1439,15 @@ ViewAgents <- function( halpha = .5,
                         hsize = 1.5,
                         asize = .6,
                         only_spillover = F ){
-     if(!exists('PLAYGROUND') ) stop( 'PLAYGROUND not found.' )
-     if( !exists('AUTHORITIES_DF') ){
-          warning('AUTHORITIES_DF not found. Only plotting hostile agents.')
-          g <- ViewHostiles( alpha = halpha, only_spillover = only_spillover )
-          return( g )
+     if( !PgExistChecker() ) stop( 'PLAYGROUND not found or empty. Cannot create plot.' )
+     if( !AuthDFExistChecker() ){ 
+          # only plotting hostile agents since AUTHROTIES_DF not found
+          return( ViewHostiles( alpha = halpha, only_spillover = only_spillover ) )
      }
-     if( !exists('HOSTILES_DF') ) stop('HOSTILES_DF not found.')
+     if( !HostDFExistChecker() ){
+          # AUTHORITIES_DF not found. Only plotting hostile agents
+          return( ViewAuthorities( alpha = aalpha ) )
+     }
      hdf <- HOSTILES_DF
      if( only_spillover ){
           hdf <- subset( hdf, current_nbhd != base_nbhd )
@@ -1338,21 +1519,7 @@ LinfNodeNodeDist <- function( node1, node2 ){
      return( max( abs(node1[1]-node2[1]), abs(node1[2] - node2[2]) ) )
 }
 
-# for dist_wts
-DistMapping <- function( dist, 
-                         close_coef,
-                         close_cutoff, 
-                         mid_cutoff ){
-     # coef chosen to create smooth cutoff boundaries
-     mid_coef <- close_coef / close_cutoff
-     far_coef <- mid_coef / mid_cutoff
-     if( dist <= close_cutoff ){
-          return( close_coef * dist )
-     } else if( close_cutoff< dist & dist <= mid_cutoff ) {
-          return( mid_coef * dist^2 )
-     }
-     return( far_coef * dist^3 )
-}
+
 
 
 # for NBHD_TENSION
@@ -1389,14 +1556,61 @@ TensionEntryCalculator <- function( outward,
      }
 }
 
+# for TENSION_MATRIX_ENTRY
+TensionEntryCalculator_new <- function( outward, 
+                                        inward, 
+                                        prev_tens ){
+     
+     
+     if( !exists('MAX_TENSION')){ 
+          warning('MAX_TENSION value not found. Setting to default 2.0')
+          assign('MAX_TENSION', 2, .GlobalEnv)
+     }
+     if( !exists('MIN_TENSION')){ 
+          warning('MIN_TENSION value not found. Setting to default 0.1')
+          assign('MIN_TENSION', 0.1, .GlobalEnv)
+     }
+     mem_offset <- MIN_TENSION
+     max_min_dif <- MAX_TENSION - MIN_TENSION
+     max_mem_coef <- 0.8 * max_min_dif
+     
+     mem_coef_fun <- function( outward, inward, max_mem_coef ){
+          if( inward == 0 ){
+               mem_coef <- 0
+          } else {
+               mem_coef <- max_mem_coef / (1 + exp(-inward))
+          }
+          return(mem_coef)
+     }
+     
+     mem_persist_fun <- function( max_mem_coef, max_min_dif ){
+          return( 1 - (max_mem_coef / max_min_dif) )
+     }
+     
+     mem_coef <- mem_coef_fun( outward, inward, max_mem_coef )
+     mem_persist <- mem_persist_fun( max_mem_coef, max_min_dif )
+     
+     tens <- mem_offset + mem_coef + (mem_persist * (prev_tens - mem_offset))
+     
+     return( tens )
+     
+}
+
 # for DOM_MATRIX_ENTRY
 DomEntryCalculator <- function( outward, 
                                 inward, 
-                                old_dom,
-                                min_dom,
-                                max_dom ){
+                                old_dom ){
      
-     dom <- min( max_dom, max( min_dom, outward - inward + old_dom ) )
+     if( !exists('MAX_DOM') ){
+          warning('MAX_DOM value not found. Setting to default value +Inf')
+          assign('MAX_DOM', Inf, .GlobalEnv)
+     }
+     if( !exists('MIN_DOM') ){
+          warning('MIN_DOM value not found. Setting to default value -Inf')
+          assign('MIN_DOM', -Inf, .GlobalEnv)
+     }
+     
+     dom <- min( MAX_DOM, max( MIN_DOM, outward - inward + old_dom ) )
      
      return( dom )
 }
@@ -1449,8 +1663,8 @@ WTer_StdHostileNodeWtsByDist <- function( base_nbhd,
                                           dfun = function( x ){ x^3 / (3*log(x) + 1) } ){
      
      
-     if(!exists('PLAYGROUND') ){
-          warning('PLAYGROUND not found. Distance weights not contributed')
+     if( !PgExistChecker() ){
+          warning('PLAYGROUND not found or empty. Distance weights not contributed')
           return( 0 )
      }
      
@@ -1476,81 +1690,12 @@ WTer_StdHostileNodeWtsByDist <- function( base_nbhd,
      return( nwd[[base_nbhd]] )
 }
 
-WTer_AvoidAuthNodes <- function( base_nbhd, 
-                                 timestep, 
-                                 mem_coef, 
-                                 mem_persist ){
-     if( !( exists('AUTH_SIGHTING_HIST') & exists('PLAYGROUND') ) ) return( 0 )
-     
-     run_anew <- function( old_nbhd_list ){
-          last_time <- old_nbhd_list$timestep
-          old_wts <- old_nbhd_list$wts
-          auth <- subset(AUTH_SIGHTING_HIST, witness_base_nbhd == base_nbhd)      
-          # only allow one sighting per auth agent per base nbhd
-          auth <- dplyr::filter( .data = dplyr::group_by( .data = auth, uid, timestep ),
-                                 row_number() == sample(safe_seq_len(n()), size = 1) )
-          auth <- as.data.frame( auth )
-          all_nodes <- rownames( PLAYGROUND )
-          n.all_nodes <- length(all_nodes)         
-          wts <- rep(0, n.all_nodes )
-          names(wts) <- all_nodes
-          if( is.null(last_time) | is.null(old_wts) ){
-               old_wts <- wts
-               last_time <- 0
-               times <- unique( auth$timestep )
-          } else if( timestep > last_time ) {
-               times <- unique( subset(auth, timestep > last_time)$timestep )
-          }
-          
-          for( tm in times ){
-               auth_sub <- subset( auth, timestep == tm )
-               time_delt <- timestep - tm
-               hot_nodes <- unique( do.call( c, lapply(auth_sub$witness_in_node, FUN = NbrIndices) ) )
-               wts[hot_nodes] <- wts[hot_nodes] + (mem_coef * mem_persist^(-time_delt))
-          }
-          old.names <- names(old_wts)
-          # don't need to multiply by mem_coef here since already has that factor from prev
-          time_delt <- timestep - last_time
-          wts[old.names] <- wts[old.names] + (mem_persist^(-time_delt) * old_wts)
-          return(wts[wts != 0])
-          
-     }
-     
-     if( !exists('.AUTH_SIGHTING_WTS_CACHE') ){
-          auth_sight <- list()
-          auth_sight[[base_nbhd]] <- list()
-          auth_sight[[base_nbhd]]$wts <- run_anew( auth_sight[[base_nbhd]] )
-          auth_sight[[base_nbhd]]$timestep <- timestep
-     } else {
-          auth_sight <- .AUTH_SIGHTING_WTS_CACHE
-          if( is.null(auth_sight[[base_nbhd]]) ){
-               auth_sight[[base_nbhd]] <- list()
-               auth_sight[[base_nbhd]]$wts <- run_anew( auth_sight[[base_nbhd]] )
-               auth_sight[[base_nbhd]]$timestep <- timestep
-               assign('.AUTH_SIGHTING_WTS_CACHE', auth_sight, .GlobalEnv)
-          } else {
-               last_time <- auth_sight[[base_nbhd]]$timestep
-               if( timestep == last_time ){
-                    return(auth_sight[[base_nbhd]]$wts)
-               }else if( timestep > last_time ){
-                    auth_sight[[base_nbhd]]$wts <- run_anew( auth_sight[[base_nbhd]] )
-                    auth_sight[[base_nbhd]]$timestep <- timestep
-                    assign('.AUTH_SIGHTING_WTS_CACHE', auth_sight, .GlobalEnv)
-               } else {
-                    warning("Error calculating auth sighting weights. No weights will be contributed.")
-                    return( 0 )
-               }
-          }
-     }
-     return( auth_sight[[base_nbhd]]$wts )
-     
-}
 
 WTer_AvoidEnemyNodesByDist <- function( base_nbhd,
                                         dfun = function( x ){ x^3 / (3*log(x) + 1) } ){
      
      
-     if(!exists('PLAYGROUND') ){
+     if( !PgExistChecker() ){
           warning('PLAYGROUND not found. Avoid enemy weights not contributed')
           return( 0 )
      } else if( !exists('.ETHSUM') ){
@@ -1583,6 +1728,384 @@ WTer_AvoidEnemyNodesByDist <- function( base_nbhd,
           assign( '.NODE_WTS_BY_ENEMY_DIST_CACHE', nwd, .GlobalEnv )
      }
      return( nwd[[base_nbhd]] )
+}
+
+WTer_AvoidAuthNodes <- function( base_nbhd, 
+                                 timestep, 
+                                 mem_coef, 
+                                 mem_persist ){
+     if( !PgExistChecker() ){
+          warning('PLAYGROUND not found or empty. Authority sighting weights not contributed')
+          return( 0 )
+     }
+     if( !( exists('AUTH_SIGHTING_HIST') ) ) return( 0 )
+     
+     run_anew <- function( old_nbhd_list ){
+          last_time <- old_nbhd_list$timestep
+          old_wts <- old_nbhd_list$wts
+          auth <- subset(AUTH_SIGHTING_HIST, witness_base_nbhd == base_nbhd)      
+          # only allow one sighting per auth agent per base nbhd
+          #auth <- dplyr::filter( .data = dplyr::group_by( .data = auth, uid, timestep ),
+          #                       row_number() == sample(safe_seq_len(n()), size = 1) )
+          #auth <- as.data.frame( auth )
+          all_nodes <- rownames( PLAYGROUND )
+          n.all_nodes <- length(all_nodes)         
+          wts <- rep(0, n.all_nodes )
+          names(wts) <- all_nodes
+          if( is.null(last_time) | is.null(old_wts) ){
+               old_wts <- wts
+               last_time <- 0
+               times <- unique( auth$timestep )
+          } else if( timestep > last_time ) {
+               times <- unique( auth$timestep[auth$timestep >= last_time] )
+               "
+               it is very important in 'times' to use >= in the subsetting because
+               we create weights this time from the interactions last time
+               "
+          }
+          
+          for( tm in times ){
+               auth_sub <- subset( auth, timestep == tm )
+               time_delt <- timestep - tm
+               hot_nodes <- unique( do.call( c, lapply(auth_sub$current_node, FUN = NbrIndices) ) )
+               wts[hot_nodes] <- wts[hot_nodes] + (mem_coef * mem_persist^(-time_delt))
+          }
+          old.names <- names(old_wts)
+          # don't need to multiply by mem_coef here since already has that factor from prev
+          time_delt <- timestep - last_time
+          wts[old.names] <- wts[old.names] + (mem_persist^(-time_delt) * old_wts)
+          return(wts[wts != 0])
+          
+          }
+     
+     if( !exists('.AUTH_SIGHTING_WTS_CACHE') ){
+          auth_sight <- list()
+          auth_sight[[base_nbhd]] <- list()
+          auth_sight[[base_nbhd]]$wts <- run_anew( auth_sight[[base_nbhd]] )
+          auth_sight[[base_nbhd]]$timestep <- timestep
+     } else {
+          auth_sight <- .AUTH_SIGHTING_WTS_CACHE
+          if( is.null(auth_sight[[base_nbhd]]) ){
+               auth_sight[[base_nbhd]] <- list()
+               auth_sight[[base_nbhd]]$wts <- run_anew( auth_sight[[base_nbhd]] )
+               auth_sight[[base_nbhd]]$timestep <- timestep
+               assign('.AUTH_SIGHTING_WTS_CACHE', auth_sight, .GlobalEnv)
+          } else {
+               last_time <- auth_sight[[base_nbhd]]$timestep
+               if( timestep == last_time ){
+                    return(auth_sight[[base_nbhd]]$wts)
+               }else if( timestep > last_time ){
+                    auth_sight[[base_nbhd]]$wts <- run_anew( auth_sight[[base_nbhd]] )
+                    auth_sight[[base_nbhd]]$timestep <- timestep
+                    assign('.AUTH_SIGHTING_WTS_CACHE', auth_sight, .GlobalEnv)
+               } else {
+                    warning("Error calculating auth sighting weights. No weights will be contributed.")
+                    return( 0 )
+               }
+          }
+     }
+     return( auth_sight[[base_nbhd]]$wts )
+}
+
+
+
+WTer_AvoidEnemyNodes <- function( base_nbhd, 
+                                 timestep, 
+                                 mem_coef, 
+                                 mem_persist ){
+     if( !PgExistChecker() ){
+          warning('PLAYGROUND not found or empty. enemyority sighting weights not contributed')
+          return( 0 )
+     }
+     if( !( exists('ENEMY_SIGHTING_HIST') ) ) return( 0 )
+     
+     run_anew <- function( old_nbhd_list ){
+          last_time <- old_nbhd_list$timestep
+          old_wts <- old_nbhd_list$wts
+          enemy <- subset(ENEMY_SIGHTING_HIST, witness_base_nbhd == base_nbhd)      
+          all_nodes <- rownames( PLAYGROUND )
+          n.all_nodes <- length(all_nodes)         
+          wts <- rep(0, n.all_nodes )
+          names(wts) <- all_nodes
+          if( is.null(last_time) | is.null(old_wts) ){
+               old_wts <- wts
+               last_time <- 0
+               times <- unique( enemy$timestep )
+          } else if( timestep > last_time ) {
+               times <- unique( enemy$timestep[enemy$timestep >= last_time] )
+               "
+               it is very important in 'times' to use >= in the subsetting because
+               we create weights this time from the interactions last time
+               "
+          }
+          for( tm in times ){
+               enemy_sub <- subset( enemy, timestep == tm )
+               time_delt <- timestep - tm
+               hot_nodes <- unique( do.call( c, lapply(enemy_sub$observed_in_node, FUN = NbrIndices) ) )
+               wts[hot_nodes] <- wts[hot_nodes] + (mem_coef * mem_persist^(-time_delt))
+          }
+          old.names <- names(old_wts)
+          # don't need to multiply by mem_coef here since already has that factor from prev
+          time_delt <- timestep - last_time
+          wts[old.names] <- wts[old.names] + (mem_persist^(-time_delt) * old_wts)
+          return(wts[wts != 0])
+          
+          }
+     
+     if( !exists('.ENEMY_SIGHTING_WTS_CACHE') ){
+          enemy_sight <- list()
+          enemy_sight[[base_nbhd]] <- list()
+          enemy_sight[[base_nbhd]]$wts <- run_anew( enemy_sight[[base_nbhd]] )
+          enemy_sight[[base_nbhd]]$timestep <- timestep
+     } else {
+          enemy_sight <- .ENEMY_SIGHTING_WTS_CACHE
+          if( is.null(enemy_sight[[base_nbhd]]) ){
+               enemy_sight[[base_nbhd]] <- list()
+               enemy_sight[[base_nbhd]]$wts <- run_anew( enemy_sight[[base_nbhd]] )
+               enemy_sight[[base_nbhd]]$timestep <- timestep
+               assign('.ENEMY_SIGHTING_WTS_CACHE', enemy_sight, .GlobalEnv)
+          } else {
+               last_time <- enemy_sight[[base_nbhd]]$timestep
+               if( timestep == last_time ){
+                    return(enemy_sight[[base_nbhd]]$wts)
+               }else if( timestep > last_time ){
+                    enemy_sight[[base_nbhd]]$wts <- run_anew( enemy_sight[[base_nbhd]] )
+                    enemy_sight[[base_nbhd]]$timestep <- timestep
+                    assign('.ENEMY_SIGHTING_WTS_CACHE', enemy_sight, .GlobalEnv)
+               } else {
+                    warning("Error calculating enemy sighting weights. No weights will be contributed.")
+                    return( 0 )
+               }
+          }
+     }
+     return( enemy_sight[[base_nbhd]]$wts )
+}
+
+WTer_AvoidHostilityNodes <- function( base_nbhd, 
+                                  timestep, 
+                                  mem_coef, 
+                                  mem_persist,
+                                  only_victim ){
+     if( !PgExistChecker() ){
+          warning('PLAYGROUND not found or empty. Hostility weights not contributed to hostile motion.')
+          return( 0 )
+     }
+     if( !( exists('HOSTILITY_HIST') ) ) return( 0 )
+     
+     run_anew <- function( old_nbhd_list ){
+          last_time <- old_nbhd_list$timestep
+          old_wts <- old_nbhd_list$wts
+          host_victs <- subset( HOSTILITY_HIST, (!during_attack) & (vict_base_nbhd == base_nbhd) )
+          if( !only_victim ){
+               host_perps <- subset( HOSTILITY_HIST, (!during_attack) & (perp_base_nbhd == base_nbhd) )
+          } 
+          all_nodes <- rownames( PLAYGROUND )
+          n.all_nodes <- length(all_nodes)         
+          wts <- rep(0, n.all_nodes )
+          names(wts) <- all_nodes
+          if( is.null(last_time) | is.null(old_wts) ){
+               old_wts <- wts
+               last_time <- 0
+               times <- unique( host_victs$timestep )
+               if( !only_victim ){
+                    times <- unique( c(times,
+                                       host_perps$timestep )
+                    )
+               }
+          } else if( timestep > last_time ) {
+               times <- unique( host_victs$timestep[host$timestep >= last_time] )
+               if( !only_victim ){
+                    times <- unique( c( times, 
+                                        host_perps$timestep[host$timestep >= last_time] )
+                    )
+               }
+               "
+               it is very important in 'times' to use >= in the subsetting because
+               we create weights this time from the interactions last time
+               "
+          }
+          
+          for( tm in times ){
+               time_delt <- timestep - tm
+               hot_nodes <- unique( do.call( c, lapply( host_victs[host_victs$timestep == tm, ]$vict_in_node, FUN = NbrIndices) ) )
+               if( !only_victim ){
+                    hot_nodes <- unique( c( hot_nodes, 
+                                            do.call( c, 
+                                                     lapply( host_perps[host_perps$timestep == tm, ]$perp_in_node, 
+                                                             FUN = NbrIndices) ) )
+                    )
+               }
+               wts[hot_nodes] <- wts[hot_nodes] + (mem_coef * mem_persist^(-time_delt))
+          }
+          old.names <- names(old_wts)
+          # don't need to multiply by mem_coef here since already has that factor from prev
+          time_delt <- timestep - last_time
+          wts[old.names] <- wts[old.names] + (mem_persist^(-time_delt) * old_wts)
+          return(wts[wts != 0])
+          
+          }
+     
+     if( !exists('.HOSTILITY_SIGHTING_WTS_CACHE') ){
+          host_sight <- list()
+          host_sight[[base_nbhd]] <- list()
+          host_sight[[base_nbhd]]$wts <- run_anew( host_sight[[base_nbhd]] )
+          host_sight[[base_nbhd]]$timestep <- timestep
+     } else {
+          host_sight <- .HOSTILITY_SIGHTING_WTS_CACHE
+          if( is.null(host_sight[[base_nbhd]]) ){
+               host_sight[[base_nbhd]] <- list()
+               host_sight[[base_nbhd]]$wts <- run_anew( host_sight[[base_nbhd]] )
+               host_sight[[base_nbhd]]$timestep <- timestep
+               assign('.HOSTILITY_SIGHTING_WTS_CACHE', host_sight, .GlobalEnv)
+          } else {
+               last_time <- host_sight[[base_nbhd]]$timestep
+               if( timestep == last_time ){
+                    return(host_sight[[base_nbhd]]$wts)
+               }else if( timestep > last_time ){
+                    host_sight[[base_nbhd]]$wts <- run_anew( host_sight[[base_nbhd]] )
+                    host_sight[[base_nbhd]]$timestep <- timestep
+                    assign('.HOSTILITY_SIGHTING_WTS_CACHE', host_sight, .GlobalEnv)
+               } else {
+                    warning("Error calculating host sighting weights. No weights will be contributed.")
+                    return( 0 )
+               }
+          }
+     }
+     return( host_sight[[base_nbhd]]$wts )
+}
+
+
+PMFer_StdHostileNodeJumper_new <- function( base_nbhd,
+                                            nbhd_to, 
+                                            timestep,
+                                            wt_offset,
+                                            adjust_by_travel_dist,
+                                            adjust_by_enemy_dist,
+                                            adjust_by_auth_enc,
+                                            adjust_by_enemy_enc,
+                                            adjust_by_hostility_enc,
+                                            travel_dfun,
+                                            enemy_dfun,
+                                            auth_mem_coef,
+                                            auth_mem_persist,
+                                            enemy_mem_coef,
+                                            enemy_mem_persist,
+                                            hostility_mem_coef,
+                                            hostility_mem_persist,
+                                            only_victim ){
+     if(!exists("PLAYGROUND")) stop("PLAYGROUND must exist before node jumping.")
+     
+     run_anew <- function(){
+          if( wt_offset <= 0 ){
+               warning('wt_offset must be positive for node jumping. Will jump uniformly.')
+               return( NULL )
+          }
+          to_nodes <- rownames(subset(PLAYGROUND, nbhd_name == nbhd_to))
+          n.nodes <- length(to_nodes)
+          wts <- rep( 0, n.nodes )
+          names(wts) <- to_nodes
+          ###
+          #from travel distance
+          if( adjust_by_travel_dist ){
+               dist_wts <- WTer_StdHostileNodeWtsByDist( base_nbhd, travel_dfun )
+               names.dists <- names(dist_wts)
+               match.names <- intersect( names.dists, to_nodes )
+               # dist_wts is positive source since preference to small weights 
+               wts[match.names] <- wts[match.names] + dist_wts[match.names]
+               rm(dist_wts) # clean room from large object
+          }
+          ###
+          #from distance to enemy designations
+          if( adjust_by_enemy_dist ){
+               enemy_wts <- WTer_AvoidEnemyNodesByDist( base_nbhd, enemy_dfun )
+               names.enemy <- names( enemy_wts )
+               match.names <- intersect( names.enemy, to_nodes )
+               # enemy_wts is negative source since preference to large weights
+               wts[match.names] <- wts[match.names] - enemy_wts
+               rm(enemy_wts)
+          }
+          ###
+          #from authority sightings
+          if(adjust_by_auth_enc){
+               auth_sight_wts <- WTer_AvoidAuthNodes( base_nbhd,
+                                                      timestep, 
+                                                      auth_mem_coef, 
+                                                      auth_mem_persist)
+               names.auth <- names(auth_sight_wts)
+               match.names <- intersect(names.auth, to_nodes)
+               wts[match.names] <- wts[match.names] + auth_sight_wts[match.names]
+               rm(auth_sight_wts)
+          }
+          #from enemy sightings
+          if(adjust_by_enemy_enc){
+               enemy_sight_wts <- WTer_AvoidEnemyNodes( base_nbhd,
+                                                      timestep, 
+                                                      enemy_mem_coef, 
+                                                      enemy_mem_persist)
+               names.enemy <- names(enemy_sight_wts)
+               match.names <- intersect(names.enemy, to_nodes)
+               wts[match.names] <- wts[match.names] + enemy_sight_wts[match.names]
+               rm(enemy_sight_wts)
+          }
+          #from hostility 
+          if(adjust_by_hostility_enc){
+               hostility_sight_wts <- WTer_AvoidHostilityNodes( base_nbhd,
+                                                      timestep, 
+                                                      hostility_mem_coef, 
+                                                      hostility_mem_persist,
+                                                      only_victim = only_victim)
+               names.hostility <- names(hostility_sight_wts)
+               match.names <- intersect(names.hostility, to_nodes)
+               wts[match.names] <- wts[match.names] + hostility_sight_wts[match.names]
+               rm(hostility_sight_wts)
+          }
+          ## shift and add offset to adjust weights
+          wts <- wts + wt_offset - min(wts)
+          #since these weights are for avoidance, we take the inverse
+          pmf <- 1 / wts
+          pmf <- pmf / sum(pmf)
+          return(pmf)
+     }
+     
+     if( !exists('.NODE_JUMPER_PMF_CACHE') ){
+          njp <- list()
+          njp[[base_nbhd]] <- list()
+          njp[[base_nbhd]][[nbhd_to]] <- list()
+          njp[[base_nbhd]][[nbhd_to]]$pmf <- run_anew()
+          njp[[base_nbhd]][[nbhd_to]]$timestep <- timestep
+          assign('.NODE_JUMPER_PMF_CACHE', njp, .GlobalEnv)
+     } else {
+          njp <- .NODE_JUMPER_PMF_CACHE
+          if( !is.null(njp[[base_nbhd]]) ){
+               if( !is.null(njp[[base_nbhd]][[nbhd_to]]) ){
+                    if( !( is.null(ts <- njp[[base_nbhd]][[nbhd_to]]$timestep) &
+                           is.null(pmf <- njp[[base_nbhd]][[nbhd_to]]$pmf) ) ){
+                         if( ts != timestep ){
+                              njp[[base_nbhd]][[nbhd_to]]$pmf <- run_anew()
+                              njp[[base_nbhd]][[nbhd_to]]$timestep <- timestep
+                              assign('.NODE_JUMPER_PMF_CACHE', njp, .GlobalEnv)
+                         }
+                    } else{
+                         njp[[base_nbhd]][[nbhd_to]]$pmf <- run_anew()
+                         njp[[base_nbhd]][[nbhd_to]]$timestep <- timestep
+                         assign('.NODE_JUMPER_PMF_CACHE', njp, .GlobalEnv)
+                    }
+               } else {
+                    njp[[base_nbhd]][[nbhd_to]] <- list()
+                    njp[[base_nbhd]][[nbhd_to]]$pmf <- run_anew()
+                    njp[[base_nbhd]][[nbhd_to]]$timestep <- timestep
+                    assign('.NODE_JUMPER_PMF_CACHE', njp, .GlobalEnv)
+               }
+          } else {
+               njp[[base_nbhd]] <- list()
+               njp[[base_nbhd]][[nbhd_to]] <- list()
+               njp[[base_nbhd]][[nbhd_to]]$pmf <- run_anew()
+               njp[[base_nbhd]][[nbhd_to]]$timestep <- timestep
+               assign('.NODE_JUMPER_PMF_CACHE', njp, .GlobalEnv)
+          }
+     }
+     return( njp[[base_nbhd]][[nbhd_to]]$pmf )
+     
 }
 
 
@@ -1684,12 +2207,16 @@ PMFer_StdHostileNbhdJumper <- function( base_nbhd,
                                         timestep,
                                         home_wt_by_quantile, 
                                         outside_wt,
-                                        ether_wt = 1,
-                                        friendly_wt = 0,
-                                        enemy_wt = 0,
+                                        ether_wt,
+                                        friendly_wt,
+                                        enemy_wt,
+                                        dfun,
                                         ... ){
      
-     if( !exists('PLAYGROUND') ) stop('PLAYGROUND not found. Unable to run PMFer_StdHostileNbhdJumper.')
+     if( !PgExistChecker() ) {
+          warning('PLAYGROUND not found. Unable to run PMFer_StdHostileNbhdJumper.')
+          return( NULL )
+     }
      if( !exists('.NBHDSUM') ){
           if( !CreateNbhdSummary()) stop('.NBHDSUM not found. Unable to run PMFer_StdHostileNbhdJumper.')
      }
@@ -1713,12 +2240,6 @@ PMFer_StdHostileNbhdJumper <- function( base_nbhd,
                          return( home_wt_by_quantile[i] )
                     }
                }
-               # idx <- which( n_nodes <= qs )
-               # if( length(idx) %in% 2:(n.hwq+1) ){
-               #      return( home_wt_by_quantile[idx[1]-1] )
-               # } else {
-               #      return( home_wt_by_quantile[1] )
-               # }
           }
           
      }
@@ -1754,7 +2275,7 @@ PMFer_StdHostileNbhdJumper <- function( base_nbhd,
           if( ether_wt > 0 ){
                ether_nbhds_wts <- lapply( ether_nbhds, FUN = function(x){ 
                     if( x == base_nbhd ) return(0)
-                    1 / max(dists[[x]],1)^3
+                    1.0 / dfun(dists[[x]])
                } )
                names( ether_nbhds_wts ) <- ether_nbhds
                match.names <- intersect( names(ether_nbhds_wts), names(nbhd_wts) )
@@ -1775,7 +2296,7 @@ PMFer_StdHostileNbhdJumper <- function( base_nbhd,
           if( friendly_wt > 0 ){
                friendly_nbhds_wts <- lapply( friendly_nbhds, FUN = function(x){ 
                     if( x == base_nbhd ) return(0)
-                    1 / max(dists[[x]],1)^3
+                    1.0 / dfun(dists[[x]])
                } )
                names(friendly_nbhds_wts) <- friendly_nbhds
                match.names <- intersect( names(friendly_nbhds_wts), names(nbhd_wts) )
@@ -1796,7 +2317,7 @@ PMFer_StdHostileNbhdJumper <- function( base_nbhd,
           if( enemy_wt > 0 ){
                enemy_nbhds_wts <- lapply( enemy_nbhds, FUN = function(x){ 
                     if( x == base_nbhd ) return(0)
-                    1 / max(dists[[x]],1)^3
+                    1.0 / dfun(dists[[x]])
                } )
                names(enemy_nbhds_wts) <- enemy_nbhds
                match.names <- intersect( names(enemy_nbhds_wts), names(nbhd_wts) )
@@ -1819,7 +2340,6 @@ PMFer_StdHostileNbhdJumper <- function( base_nbhd,
      }
      
      
-     
      if( ! exists('.NBHD_JUMP_PMF_CACHE') ){ 
           jump_cache <- list()
      } else {
@@ -1827,18 +2347,27 @@ PMFer_StdHostileNbhdJumper <- function( base_nbhd,
      }
      if( is.null(jump_cache[[base_nbhd]]) ){
           pmf <- run_anew()
-          jump_cache[[base_nbhd]] <- pmf
+          jump_cache[[base_nbhd]] <- list()
+          jump_cache[[base_nbhd]]$timestep <- timestep
+          jump_cache[[base_nbhd]]$pmf <- pmf
+          assign('.NBHD_JUMP_PMF_CACHE', jump_cache, .GlobalEnv)
+     } else if( jump_cache[[base_nbhd]]$timestep != timestep ){
+          pmf <- run_anew()
+          jump_cache[[base_nbhd]]$timestep <- timestep
+          jump_cache[[base_nbhd]]$pmf <- pmf
           assign('.NBHD_JUMP_PMF_CACHE', jump_cache, .GlobalEnv)
      } else {
-          pmf <- jump_cache[[base_nbhd]]
+          pmf <- jump_cache[[base_nbhd]]$pmf
      }
      return( pmf )
 }
 
-WTer_HostilityInNodes <- function(  timestep, 
-                                    mem_coef, 
-                                    mem_persist ){
-     if( !( exists('HOSTILITY_HIST') & exists('PLAYGROUND') ) ) return( 0 )
+WTer_HostilityNodes <- function(  timestep, 
+                                  mem_coef, 
+                                  mem_persist ){ 
+     
+     if( !exists('PLAYGROUND') ) stop( 'PLAYGROUND not found. Cannot run ABM.')
+     if( !exists('HOSTILITY_HIST') ) return( 0 )
      
      run_anew <- function( old_list ){
           last_time <- old_list$timestep
@@ -1853,7 +2382,11 @@ WTer_HostilityInNodes <- function(  timestep,
                last_time <- 0
                times <- unique( host_hist$timestep )
           } else if( timestep > last_time ) {
-               times <- unique( subset(host_hist, timestep > last_time)$timestep )
+               times <- unique( host_hist$timestep[host_hist$timestep >= last_time] )
+               "
+               it is very important in 'times' to use >= in the subsetting because
+               we create weights this time from the interactions last time
+               "
           }
           
           for( tm in times ){
@@ -1869,19 +2402,20 @@ WTer_HostilityInNodes <- function(  timestep,
           wts[old.names] <- wts[old.names] + (mem_persist^(-time_delt) * old_wts)
           return(wts)
           
-     }
+          }
      
-     if( !exists('.HOST_SIGHTING_WTS_CACHE') ){
+     if( !exists('.AUTH_HOSTILITY_WTS_CACHE') ){
           hs <- list()
           hs$wts <- run_anew( hs )
           hs$timestep <- timestep
+          assign('.AUTH_HOSTILITY_WTS_CACHE', hs, .GlobalEnv)
      } else {
-          hs <- .HOST_SIGHTING_WTS_CACHE
+          hs <- .AUTH_HOSTILITY_WTS_CACHE
           if( is.null(hs) ){
                hs <- list()
                hs$wts <- run_anew( hs )
                hs$timestep <- timestep
-               assign('.HOST_SIGHTING_WTS_CACHE', hs, .GlobalEnv)
+               assign('.AUTH_HOSTILITY_WTS_CACHE', hs, .GlobalEnv)
           } else {
                last_time <- hs$timestep
                if( timestep == last_time ){
@@ -1889,22 +2423,100 @@ WTer_HostilityInNodes <- function(  timestep,
                }else if( timestep > last_time ){
                     hs$wts <- run_anew( hs )
                     hs$timestep <- timestep
-                    assign('.HOST_SIGHTING_WTS_CACHE', hs, .GlobalEnv)
+                    assign('.AUTH_HOSTILITY_WTS_CACHE', hs, .GlobalEnv)
                } else {
                     warning("Error calculating auth sighting weights. No weights will be contributed.")
                     return( 0 )
                }
           }
      }
+     
      return( hs$wts )
 }
 
 
+
+WTer_HostilityInteractionNodes <- function(  timestep, 
+                                             mem_coef, 
+                                             mem_persist ){ 
+     
+     if( !exists('PLAYGROUND') ) stop( 'PLAYGROUND not found. Cannot run ABM.')
+     if( !exists('ENEMY_SIGHTING_HIST') ) return( 0 )
+     
+     run_anew <- function( old_list ){
+          last_time <- old_list$timestep
+          old_wts <- old_list$wts
+          host_hist <- ENEMY_SIGHTING_HIST
+          all_nodes <- rownames( PLAYGROUND )
+          n.all_nodes <- length(all_nodes)         
+          wts <- rep(0, n.all_nodes )
+          names(wts) <- all_nodes
+          if( is.null(last_time) | is.null(old_wts) ){
+               old_wts <- wts
+               last_time <- 0
+               times <- unique( host_hist$timestep )
+          } else if( timestep > last_time ) {
+               times <- unique( host_hist$timestep[host_hist$timestep >= last_time] )
+               "
+               it is very important in 'times' to use >= in the subsetting because
+               we create weights this time from the interactions last time
+               "
+          }
+          
+          for( tm in times ){
+               hh_sub <- host_hist[host_hist$timestep == tm, ]
+               time_delt <- timestep - tm
+               # no unique outside do.call here since there may be overlapping regions that should be awarded more
+               hot_nodes <- do.call( c, lapply( unique( hh_sub$witness_in_node ), FUN = NbrIndices) )
+               wts[hot_nodes] <- wts[hot_nodes] + (mem_coef * mem_persist^(-time_delt))
+          }
+          old.names <- names(old_wts)
+          # don't need to multiply by mem_coef here since already has that factor from prev
+          time_delt <- timestep - last_time
+          wts[old.names] <- wts[old.names] + (mem_persist^(-time_delt) * old_wts[old.names])
+          return(wts)
+          
+          }
+     
+     if( !exists('.HOSTILE_INTERACTION_WTS_CACHE') ){
+          hs <- list()
+          hs$wts <- run_anew( hs )
+          hs$timestep <- timestep
+          assign('.HOSTILE_INTERACTION_WTS_CACHE', hs, .GlobalEnv)
+     } else {
+          hs <- .HOSTILE_INTERACTION_WTS_CACHE
+          if( is.null(hs) ){
+               hs <- list()
+               hs$wts <- run_anew( hs )
+               hs$timestep <- timestep
+               assign('.HOSTILE_INTERACTION_WTS_CACHE', hs, .GlobalEnv)
+          } else {
+               last_time <- hs$timestep
+               if( timestep == last_time ){
+                    return(hs$wts)
+               }else if( timestep > last_time ){
+                    hs$wts <- run_anew( hs )
+                    hs$timestep <- timestep
+                    assign('.HOSTILE_INTERACTION_WTS_CACHE', hs, .GlobalEnv)
+               } else {
+                    warning("Error calculating hostile interaction weights. No weights will be contributed.")
+                    return( 0 )
+               }
+          }
+     }
+     
+     return( hs$wts )
+     }
+
 PMFer_AuthNodeJumper <- function(  assigned_nbhd,
                                    timestep,
                                    wt_offset,
-                                   mem_coef,
-                                   mem_persist ){
+                                   adjust_by_hostility,
+                                   adjust_by_hostile_inter,
+                                   hostility_mem_coef, 
+                                   hostility_mem_persist,
+                                   hostinter_mem_coef, 
+                                   hostinter_mem_persist){
      if(!exists('PLAYGROUND')) stop("PLAYGROUND must exist before node jumping.")
      
      run_anew <- function(){
@@ -1923,16 +2535,29 @@ PMFer_AuthNodeJumper <- function(  assigned_nbhd,
           }
           
           n.nodes <- length( ass_nodes )
-          wts <- rep( wt_offset, times = n.nodes )
+          wts <- rep( 0, times = n.nodes )
           names( wts ) <- ass_nodes
-          host_wts <- WTer_HostilityInNodes( timestep = timestep, 
-                                             mem_coef = mem_coef, 
-                                             mem_persist = mem_persist )
-          names.host <- names(host_wts)
-          match.names <- intersect( names.host, ass_nodes )
-          wts[match.names] <- wts[match.names] + host_wts[match.names]
-          wts[wts <= wt_offset] <- wt_offset
-          pmf <- 1/wts
+          if( adjust_by_hostility ){
+               host_wts <- WTer_HostilityNodes( timestep = timestep, 
+                                                mem_coef = hostility_mem_coef, 
+                                                mem_persist = hostility_mem_persist )
+               names.host <- names(host_wts)
+               match.names <- intersect( names.host, ass_nodes )
+               wts[match.names] <- wts[match.names] - host_wts[match.names]
+          }
+          if( adjust_by_hostile_inter ){
+               host_int_wts <- WTer_HostilityInteractionNodes( timestep = timestep, 
+                                                               mem_coef = hostinter_mem_coef, 
+                                                               mem_persist = hostinter_mem_persist )
+               
+               names.host <- names(host_int_wts)
+               match.names <- intersect( names.host, ass_nodes )
+               wts[match.names] <- wts[match.names] - host_int_wts[match.names]
+          }
+          
+          wts <- wts + wt_offset - min(wts)
+          #since these weights are for avoidance, we take the inverse
+          pmf <- 1 / wts
           pmf <- pmf / sum(pmf)
           
           return( pmf )
@@ -1966,16 +2591,22 @@ PMFer_AuthNodeJumper <- function(  assigned_nbhd,
                assign('.AUTH_NODE_JUMPER_PMF_CACHE', njp, .GlobalEnv)
           }
      }
+     
      return( njp[[assigned_nbhd]]$pmf )
 }
 
 AuthAgentNodeJumper <- function( auth_agents,
                                  timestep,
                                  wt_offset,
-                                 mem_coef, 
-                                 mem_persist ){
+                                 adjust_by_hostility,
+                                 adjust_by_hostile_inter,
+                                 hostility_mem_coef, 
+                                 hostility_mem_persist,
+                                 hostinter_mem_coef, 
+                                 hostinter_mem_persist ){
      
      #need PLAYGROUND, AUTHORITIES_DF, AUTH_NBHD_NODES
+     if( is.null(auth_agents) ) return(NULL)
      if(nrow(auth_agents) == 0) return(NULL)
      assigned_nbhds <- unique( auth_agents$assigned_nbhd )
      for( an in assigned_nbhds ){
@@ -1985,8 +2616,12 @@ AuthAgentNodeJumper <- function( auth_agents,
           if( !is.null(pmf <- PMFer_AuthNodeJumper(assigned_nbhd = an, 
                                                    timestep = timestep,
                                                    wt_offset = wt_offset,
-                                                   mem_coef = mem_coef,
-                                                   mem_persist = mem_persist)) ){
+                                                   adjust_by_hostility = adjust_by_hostility,
+                                                   adjust_by_hostile_inter = adjust_by_hostile_inter,
+                                                   hostility_mem_coef = hostility_mem_coef, 
+                                                   hostility_mem_persist = hostility_mem_persist,
+                                                   hostinter_mem_coef = hostinter_mem_coef, 
+                                                   hostinter_mem_persist = hostinter_mem_persist)) ){
                auth_sub$current_node <- sample( names(pmf), size = n.ag, prob = pmf, replace = T )
           } else {
                warning(sprintf('Error creating authority pmf for nbhd %s.',an))
@@ -2024,22 +2659,31 @@ FamNbhd <- function( family ){
 }
 
 
-StdHostileAgentsMover <- function( agents,
-                                   timestep ){
-     
+UpdateHostilesDF <- function( timestep ){
+     # make sure HOSTILES_DF is correctly defined
+     if( !HostDFExistChecker() ){
+          warning('HOSTILES_DF does not exist or is empty. No movement updated.')
+          return( F )
+     }
+     # create an alias to work on
+     agents <- HOSTILES_DF
+     # partition by family since attacks are family-level events
      for( fam in unique( agents$family) ){
           atk <- ATTACK( fam )
           atk_bool  <- !is.null(atk)
+          # if there is an attack, update hostility records
           if( atk_bool ) UpdateAttackHostilities( fam, atk, timestep )
           in_fam <- agents$family == fam
           ag_in_fam <- agents[in_fam, ]
+          # partition by nbhd; JUMPers are nbhd specific
           for( base_nbhd in unique( ag_in_fam$base_nbhd ) ){
                in_nbhd <- ag_in_fam$base_nbhd == base_nbhd
                ag_in_nbhd <- ag_in_fam[in_nbhd, ]
-               
+               # choose which nbhd to move to
                ag_in_nbhd <- HOST_NBHD_JUMPer( ag_in_nbhd, 
                                                attacking = atk_bool,
                                                timestep )
+               # choose which node to move to
                ag_in_nbhd <- HOST_NODE_JUMPer( ag_in_nbhd, 
                                                attacking = atk_bool, 
                                                timestep = timestep )
@@ -2047,14 +2691,15 @@ StdHostileAgentsMover <- function( agents,
           }
           agents[in_fam, ] <- ag_in_fam
      }
-     return( agents )
-     
+     # update HOSTILES_DF
+     assign('HOSTILES_DF', agents, .GlobalEnv)
+     return( T )
 }
 
 "
-TOM: You need to finish StdHostileNbhdJumper below and remove the excess code from StdHostileAgentsMover.
+TOM: You need to finish StdHostileNbhdJumper below and remove the excess code from UpdateHostilesDF.
 Note that Jumper* class functions are the composition helpers with PMFers to be used in static functions
-such as StdHostileAgentsMover.
+such as UpdateHostilesDF.
 "
 StdHostileNbhdJumper <- function( agents,
                                   timestep,
@@ -2063,10 +2708,31 @@ StdHostileNbhdJumper <- function( agents,
                                   ether_wt,
                                   friendly_wt,
                                   enemy_wt,
+                                  dfun,
+                                  adjust_for_tension,
+                                  fear_fac,
+                                  anger_fac,
                                   ... ){
+     ### ADDED
+     get_home_wt_by_quantile <- function( base_nbhd ){
+          if( !adjust_for_tension ) return( home_wt_by_quantile )
+          if( !(exists('TENSION_MATRIX') & exists('MIN_TENSION') & exists('MAX_TENSION')) ){
+               warning( 'TENSION variables not found.' )
+               return( home_wt_by_quantile )
+          }
+          anger <- max( TENSION_MATRIX[which(rownames(TENSION_MATRIX) == base_nbhd), ] )
+          fear <- max( TENSION_MATRIX[, which(colnames(TENSION_MATRIX) == base_nbhd)] )
+          fac <- 1 + fear_fac * (fear - MIN_TENSION)/(MAX_TENSION - MIN_TENSION) - 
+               anger_fac * (anger - MIN_TENSION)/(MAX_TENSION - MIN_TENSION)
+          return( fac * home_wt_by_quantile )
+     }
      
      for( base_nbhd in unique( agents$base_nbhd ) ){
           in_nbhd <- agents$base_nbhd == base_nbhd
+          
+          ### ADDED
+          hwbq <- get_home_wt_by_quantile( base_nbhd )
+          
           pmf <- PMFer_StdHostileNbhdJumper(base_nbhd = base_nbhd,
                                             timestep = timestep,
                                             home_wt_by_quantile = home_wt_by_quantile,
@@ -2074,6 +2740,7 @@ StdHostileNbhdJumper <- function( agents,
                                             ether_wt = ether_wt, 
                                             friendly_wt = friendly_wt,
                                             enemy_wt = enemy_wt,
+                                            dfun,
                                             ... )
           if( is.null(pmf) ){
                # trouble, go home!
@@ -2094,10 +2761,20 @@ StdHostileNbhdJumper <- function( agents,
 StdHostileNodeJumper <- function( agents, 
                                   timestep,
                                   wt_offset,
+                                  adjust_by_travel_dist,
+                                  adjust_by_enemy_dist,
+                                  adjust_by_auth_enc,
+                                  adjust_by_enemy_enc,
+                                  adjust_by_hostility_enc,
                                   travel_dfun,
                                   enemy_dfun,
                                   auth_mem_coef,
-                                  auth_mem_persist ){
+                                  auth_mem_persist,
+                                  enemy_mem_coef,
+                                  enemy_mem_persist,
+                                  hostility_mem_coef,
+                                  hostility_mem_persist,
+                                  only_victim ){
      
      if(!exists('PLAYGROUND')) stop( "PLAYGROUND must exist before node jumping.")
      
@@ -2112,14 +2789,24 @@ StdHostileNodeJumper <- function( agents,
                to_nbhd <- moved_agents$current_nbhd == nbhd_to
                n.rem_ag <- nrow( moved_agents[in_nbhd & to_nbhd, ] )
                if( n.rem_ag <= 0 ) next
-               pmf <- PMFer_StdHostileNodeJumper( base_nbhd,
-                                                  nbhd_to, 
-                                                  timestep,
-                                                  wt_offset,
-                                                  travel_dfun,
-                                                  enemy_dfun,
-                                                  auth_mem_coef,
-                                                  auth_mem_persist )
+               pmf <- PMFer_StdHostileNodeJumper_new( base_nbhd = base_nbhd,
+                                                      nbhd_to = nbhd_to, 
+                                                      timestep = timestep,
+                                                      wt_offset = wt_offset,
+                                                      adjust_by_travel_dist = adjust_by_travel_dist,
+                                                      adjust_by_enemy_dist = adjust_by_enemy_dist,
+                                                      adjust_by_auth_enc = adjust_by_auth_enc,
+                                                      adjust_by_enemy_enc = adjust_by_enemy_enc,
+                                                      adjust_by_hostility_enc = adjust_by_hostility_enc,
+                                                      travel_dfun = travel_dfun,
+                                                      enemy_dfun = enemy_dfun,
+                                                      auth_mem_coef = auth_mem_coef,
+                                                      auth_mem_persist = auth_mem_persist,
+                                                      enemy_mem_coef = enemy_mem_coef,
+                                                      enemy_mem_persist = enemy_mem_persist,
+                                                      hostility_mem_coef = hostility_mem_coef,
+                                                      hostility_mem_persist = hostility_mem_persist,
+                                                      only_victim = only_victim )
                if( !is.null(pmf) ){
                     moved_agents[in_nbhd & to_nbhd, ]$current_node <- sample( names(pmf), size = n.rem_ag, prob = pmf )
                } else {
@@ -2177,33 +2864,33 @@ HOSTILES <- list(
           nbhd_lattice = RectNbhdMaker( topl_r = 1, topl_c = 130, botr_r = 20, botr_c = 150 ),
           designation = 'folk',
           family = 'GD',
-          agents = c( standard = (20-1+1)*(150-130+1) ) #one per node
+          agents = c( standard = (20-1+1)*(150-130+1) ) 
      ),
      folk_2 = list(
           nbhd_lattice = RectNbhdMaker( topl_r = 43, topl_c = 130, botr_r = 48, botr_c = 135 ),
           designation = 'folk',
-          agents = c( standard = (48-43+1)*(135-130+1) ) #one per node
+          agents = c( standard = (48-43+1)*(135-130+1) ) 
      ),
      folk_3 = list(
           nbhd_lattice = RectNbhdMaker( topl_r = 80, topl_c = 1, botr_r = 90, botr_c = 10 ),
           designation = 'folk',
-          agents = c( standard = (90-80+1)*(10-1+1) ) #one per node
+          agents = c( standard = (90-80+1)*(10-1+1) ) 
      ),
      folk_4 = list(
           nbhd_lattice = RectNbhdMaker( topl_r = 80, topl_c = 70, botr_r = 95, botr_c = 80 ),
           designation = 'folk',
-          agents = c( standard = (95-80+1)*(80-70+1) ) #one per node
+          agents = c( standard = (95-80+1)*(80-70+1) ) 
      ),
      folk_5 = list(
           nbhd_lattice = RectNbhdMaker( topl_r = 100, topl_c = 30, botr_r = 105, botr_c = 40 ),
           designation = 'folk',
-          agents = c( standard = (105-100+1)*(40-30+1) ) #one per node
+          agents = c( standard = (105-100+1)*(40-30+1) )
      ),
      folk_6 = list(
           nbhd_lattice = RectNbhdMaker( topl_r = 200, topl_c = 40, botr_r = 275, botr_c = 100 ),
           designation = 'folk',
           family = 'GD',
-          agents = c( standard = (275-200+1)*(100-40+1) ) #one per node
+          agents = c( standard = (275-200+1)*(100-40+1) ) 
      ),
      folk_7 = list(
           nbhd_lattice = RectNbhdMaker( topl_r = 200, topl_c = 101, botr_r = 275, botr_c = 115 ),
@@ -2291,17 +2978,17 @@ HOSTILES <- list(
 )
 
 AUTHORITIES <- list( 
-     n_assigned = 300,
-     n_free = 5,
-     assignment_radius = 5,
-     min_per_nbhd = 3
+     n_assigned = 0,
+     n_free = 500,
+     assignment_radius = 10,
+     min_per_nbhd = 0
 )
 
 ### Any other type of nbhd
 OTHER_NBHDS <- list()
 
 ### Nearby neighbor radius
-NBR_RADIUS <- 1
+NBR_RADIUS <- 2
 
 ### Use "walled neighborhoods" during agent interaction
 WALLED_NBHDS <- T
@@ -2311,6 +2998,14 @@ AGGL_AUTHORITY <- T
 
 ### Record all authority/hostile interactions? Or only those which prevent a hostility
 ALL_AUTH_INTERACTIONS <- F
+
+### Tension max and min
+MIN_TENSION <- 0.1
+MAX_TENSION <- 3
+
+### Dominance count max and min
+MAX_DOM <- Inf
+MIN_DOM <- -Inf
 
 ### Run in VERBOSE mode
 VERBOSE <- T
@@ -2325,29 +3020,25 @@ METRIC <- function(node1, node2, ...){ TaxiNodeNodeDist(node1, node2 ) }
 NBHD_TENSION <- function(from_nbhd, towards_nbhd, ...){ TensionCalculator(from_nbhd, towards_nbhd, mode = 'max') }
 
 # TENSION_MATRIX_ENTRY must accept outward, inward, and old_tens as entries
-TENSION_MATRIX_ENTRY <- function( outward, inward, old_tens, ... ){ TensionEntryCalculator(outward,
-                                                                                           inward,
-                                                                                           old_tens,
-                                                                                           min_tens = .2,
-                                                                                           max_tens = 2,
-                                                                                           forget_fac = 0.95) }
+TENSION_MATRIX_ENTRY <- function( outward, inward, old_tens, ... ){ TensionEntryCalculator_new(outward,
+                                                                                               inward,
+                                                                                               old_tens) }
+
 # DOM_MATRIX_ENTRY must accept outward, inward, and old_dom as entries
 DOM_MATRIX_ENTRY <- function( outward, inward, old_dom, ... ){ DomEntryCalculator( outward, 
                                                                                    inward, 
-                                                                                   old_dom, 
-                                                                                   min_dom = -Inf,
-                                                                                   max_dom = Inf) }
+                                                                                   old_dom ) }
 
 # SHOOT must accept perp_agent and vict_agent as entries; returns T/F
 SHOOT <- function( perp_agent, vict_agent, ... ){ ShootDecision(perp_agent, vict_agent, shoot_factor = 0.5) }
 
 # ATTACK must accept attacker_fam; returns chr of family to attack, or NULL if none
 ATTACK <- function( attacker_fam, ... ){  AttackDecision( attacker_fam, 
-                                                             will_attack_at = 5,
-                                                             allow_multiple_attacks = T ) }
+                                                          will_attack_at = 10,
+                                                          allow_multiple_attacks = T ) }
 
 ATTACK_DOM_COUNT <- function( cur_dom_cnt ){
-     min_dom_cnt <- 3
+     min_dom_cnt <- 2
      max_dom_cnt <- 6
      val <- max( min_dom_cnt, min( cur_dom_cnt + 1, max_dom_cnt ) )
      return( val )
@@ -2355,22 +3046,32 @@ ATTACK_DOM_COUNT <- function( cur_dom_cnt ){
 
 HOST_NBHD_JUMPer <- function( agents, attacking, timestep, ... ){
      if( attacking ){
+          # if in attack mode, how do hostile agents jump nbhds
           updated_agents <- StdHostileNbhdJumper( agents,
                                                   timestep,
-                                                  home_wt = c(80, 82.5, 85, 87.5, 90), 
+                                                  home_wt_by_quantile = c(60, 70, 80, 90, 100), 
                                                   outside_wt = 2,
                                                   ether_wt = 100,
                                                   friendly_wt = 15,
-                                                  enemy_wt = 0 )
+                                                  enemy_wt = 0,
+                                                  dfun = function(x){ dist3( dist = x, coef = 1, min_val = 1 ) },
+                                                  adjust_for_tension = T,
+                                                  fear_fac = .15,
+                                                  anger_fac = 0.0 )
           
      } else {
+          # if not in attack mode, how do hostile agents jump nbhds
           updated_agents <- StdHostileNbhdJumper( agents,
                                                   timestep,
-                                                  home_wt = c(80, 82.5, 85, 87.5, 90), 
+                                                  home_wt_by_quantile = c(60, 70, 80, 90, 100), 
                                                   outside_wt = 5,
                                                   ether_wt = 100,
                                                   friendly_wt = 15,
-                                                  enemy_wt = 0 )
+                                                  enemy_wt = 2,
+                                                  dfun = function(x){ dist3( dist = x, coef = 1, min_val = 1 ) },
+                                                  adjust_for_tension = T,
+                                                  fear_fac = 0.1,
+                                                  anger_fac = 0.0 )
      }
      return( updated_agents )
 }
@@ -2380,20 +3081,28 @@ HOST_NODE_JUMPer <- function( agents, attacking, timestep, ... ){
      updated_agents <- StdHostileNodeJumper( agents,
                                              timestep,
                                              wt_offset = 1,
+                                             adjust_by_travel_dist = T,
+                                             adjust_by_enemy_dist = T,
+                                             adjust_by_auth_enc = F,
+                                             adjust_by_enemy_enc = F,
+                                             adjust_by_hostility_enc = F,
                                              travel_dfun = function(x){ 
-                                                  DistMapping( dist = x,
-                                                               close_coef = 2,
-                                                               close_cutoff = 10,
-                                                               mid_cutoff = 20 )
+                                                  distGraded( dist = x,
+                                                              close_coef = 2,
+                                                              close_cutoff = 10,
+                                                              mid_cutoff = 20 )
                                              },
                                              enemy_dfun = function(x){ 
-                                                  DistMapping( dist = x,
-                                                               close_coef = 1/10,
-                                                               close_cutoff = 10,
-                                                               mid_cutoff = 20 )
+                                                  dist1( dist = x, 
+                                                         coef = 1 )
                                              },
                                              auth_mem_coef = 2,
-                                             auth_mem_persist = 2 )
+                                             auth_mem_persist = 1.5,
+                                             enemy_mem_coef = 2,
+                                             enemy_mem_persist = 1.5,
+                                             hostility_mem_coef = 2,
+                                             hostility_mem_persist = 1.5,
+                                             only_victim = T  )
      return( updated_agents )
 }
 
@@ -2506,6 +3215,18 @@ Setup <- function(  ){
           cat("Error creating .PGSUM and .ETHSUM via CreatePlaygroundSummaries\nSetup Failed.\n")
           return(F)
      } 
+     if( !CreateNbhdSummary() ){ 
+          cat("Error creating .NBHDSUM dataframe via CreateNbhdSummary\nSetup Failed.\n")
+          return(F)
+     } else {
+          if( VERBOSE ){ 
+               cat("NBHD summary:\n")
+               print(.NBHDSUM )
+               cat('\n')}
+     }
+     
+     assign('HOSTILES', HostAgentCntsHelper( HOSTILES ), .GlobalEnv)
+     
      if( !CreateHostilesDF() ){ 
           cat("Error creating HOSTILES_DF dataframe via CreateHostilesDF.\nSetup Failed.\n")
           return(F)
@@ -2517,15 +3238,6 @@ Setup <- function(  ){
           if( VERBOSE ){ 
                cat("Hostile agent summary:\n")
                print(.HOSTSUM )
-               cat('\n')}
-     }
-     if( !CreateNbhdSummary() ){ 
-          cat("Error creating .NBHDSUM dataframe via CreateNbhdSummary\nSetup Failed.\n")
-          return(F)
-     } else {
-          if( VERBOSE ){ 
-               cat("Hostile nbhd summary:\n")
-               print(.NBHDSUM )
                cat('\n')}
      }
      if(!CreateAuthNbhdNodes()){
@@ -2561,14 +3273,18 @@ RunSample <- function( niter = 10 ){
           t.s <- Sys.time()
           cat(sprintf('Beginning timestep %d...\n', tstep))
           cat('\t-updating hostile agents... ')
-          HOSTILES_DF <<- StdHostileAgentsMover( HOSTILES_DF, tstep )
+          UpdateHostilesDF( tstep )
           cat('Done.\n')
           cat('\t-updating authority agents... ')
           AUTHORITIES_DF <<- AuthAgentNodeJumper(AUTHORITIES_DF, 
                                                  tstep, 
                                                  wt_offset = 1,
-                                                 mem_coef = 2,
-                                                 mem_persist = 2 )
+                                                 adjust_by_hostility = T,
+                                                 adjust_by_hostile_inter = T,
+                                                 hostility_mem_coef = 100,
+                                                 hostility_mem_persist = 1.25,
+                                                 hostinter_mem_coef = 50,
+                                                 hostinter_mem_persist = 1.25)
           cat('Done.\n')
           cat('\t-calculating interactions... ')
           UpdateInteractions(tstep)
@@ -2577,7 +3293,7 @@ RunSample <- function( niter = 10 ){
                this_time <- subset(HOSTILITY_HIST, timestep == tstep  )
                # hostilities that happen without an attack
                std_host <- dplyr::summarise(dplyr::group_by( subset(this_time, !during_attack), perp_base_nbhd, vict_base_nbhd ), 
-                                             n = n())
+                                            n = n())
                
                n.cnts <- nrow(std_host)
                if(n.cnts > 0){
@@ -2591,7 +3307,7 @@ RunSample <- function( niter = 10 ){
                }
                # hostilities involved in an attack
                attack_host <- dplyr::summarise(dplyr::group_by( subset(this_time, during_attack), perp_fam, vict_fam ), 
-                                              n = n())
+                                               n = n())
                n.cnts <- nrow(attack_host)
                if(n.cnts > 0){
                     cat('\t Attack Hostilities Recorded:\n')

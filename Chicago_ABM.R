@@ -1599,18 +1599,11 @@ TensionEntryCalculator_new <- function( outward,
 # for DOM_MATRIX_ENTRY
 DomEntryCalculator <- function( outward, 
                                 inward, 
-                                old_dom ){
+                                old_dom, 
+                                max_dom = Inf,
+                                min_dom = -Inf ){
      
-     if( !exists('MAX_DOM') ){
-          warning('MAX_DOM value not found. Setting to default value +Inf')
-          assign('MAX_DOM', Inf, .GlobalEnv)
-     }
-     if( !exists('MIN_DOM') ){
-          warning('MIN_DOM value not found. Setting to default value -Inf')
-          assign('MIN_DOM', -Inf, .GlobalEnv)
-     }
-     
-     dom <- min( MAX_DOM, max( MIN_DOM, outward - inward + old_dom ) )
+     dom <- min( max_dom, max( min_dom, outward - inward + old_dom ) )
      
      return( dom )
 }
@@ -3027,7 +3020,9 @@ TENSION_MATRIX_ENTRY <- function( outward, inward, old_tens, ... ){ TensionEntry
 # DOM_MATRIX_ENTRY must accept outward, inward, and old_dom as entries
 DOM_MATRIX_ENTRY <- function( outward, inward, old_dom, ... ){ DomEntryCalculator( outward, 
                                                                                    inward, 
-                                                                                   old_dom ) }
+                                                                                   old_dom,
+                                                                                   max_dom = Inf,
+                                                                                   min_dom = -Inf ) }
 
 # SHOOT must accept perp_agent and vict_agent as entries; returns T/F
 SHOOT <- function( perp_agent, vict_agent, ... ){ ShootDecision(perp_agent, vict_agent, shoot_factor = 0.5) }

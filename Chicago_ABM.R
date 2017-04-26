@@ -989,8 +989,8 @@ UpdateTensionMatrix <- function( timestep ){
      return(T)
 }
 
-UpdateAttackHostilities <- function( family, 
-                                     to_attack, 
+UpdateAttackHostilities <- function( attacker, 
+                                     attackees, 
                                      timestep ){
      
      if( !exists('DOMINANCE_MATRIX') ){
@@ -1000,11 +1000,11 @@ UpdateAttackHostilities <- function( family,
      }
      
      host_hist <- data.frame()
-     for( fam_to_atk in to_attack ){
-          atk_dom <- ATTACK_DOM_COUNT( DOMINANCE_MATRIX[family, fam_to_atk] )
-          perp_fam <- rep( family, times = atk_dom )
+     for( attackee in attackees ){
+          atk_dom <- ATTACK_SEVERITY( DOMINANCE_MATRIX[attacker, attackee] )
+          perp_fam <- rep( attacker, times = atk_dom )
           perp_desig <- FamDesignation( perp_fam )
-          vict_fam <- rep( fam_to_atk, times = atk_dom )
+          vict_fam <- rep( attackee, times = atk_dom )
           vict_desig <- FamDesignation( vict_fam )
           
           host_hist <- rbind( host_hist,
@@ -1626,8 +1626,8 @@ ShootDecision <- function( perp_agent,
 
 # for ATTACK
 AttackDecision <- function( hfam, 
-                            will_attack_at = 5,
-                            allow_multiple_attacks = T ){
+                            will_attack_at,
+                            allow_multiple_attacks ){
      # requires DOMINANCE MATRIX
      if( !exists('DOMINANCE_MATRIX') ) return(NULL)
      if( nrow(DOMINANCE_MATRIX) == 0 ) return(NULL)
@@ -1647,6 +1647,15 @@ AttackDecision <- function( hfam,
      return( to_attack )
 }
 
+AttackSeverityCalculator <- function( min_severity,
+                                      max_severity,
+                                      old_dom_gap,
+                                      escal_quant ){
+     
+     val <- max( min_severity, min( old_dom_gap + escal_quant, max_severity ) )
+     return( val )
+     
+}
 
 ############################### CONT'D: TUNABLE HELPERS ##############################
 ############################### SUBSECTION: PMFers ####################################
@@ -3032,11 +3041,12 @@ ATTACK <- function( attacker_fam, ... ){  AttackDecision( attacker_fam,
                                                           will_attack_at = 10,
                                                           allow_multiple_attacks = T ) }
 
-ATTACK_DOM_COUNT <- function( cur_dom_cnt ){
-     min_dom_cnt <- 2
-     max_dom_cnt <- 6
-     val <- max( min_dom_cnt, min( cur_dom_cnt + 1, max_dom_cnt ) )
-     return( val )
+
+ATTACK_SEVERITY <- function( dom ){
+     AttackSeverityCalculator( min_severity = 2,
+                               max_severity = 6,
+                               old_dom_gap = abs(dom),
+                               escal_quant = 1 )
 }
 
 HOST_NBHD_JUMPer <- function( agents, attacking, timestep, ... ){
